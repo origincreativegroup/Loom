@@ -6,14 +6,22 @@ Provides unified interface to local OSINT tools on pi-net
 import asyncio
 import json
 import os
+import logging
 from abc import ABC, abstractmethod
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import asyncssh
 import docker
 from docker.errors import DockerException
+
+# Logger
+logger = logging.getLogger("loom.tools")
+
+# Thread pool for blocking Docker operations
+docker_executor = ThreadPoolExecutor(max_workers=4)
 
 
 # ============================================================================
@@ -68,6 +76,8 @@ class ReconNGTool(OSINTTool):
             # Default to subdomain enumeration
             module = options.get("module", "recon/domains-hosts/hackertarget") if options else "recon/domains-hosts/hackertarget"
 
+            logger.info(f"Running Recon-ng for {target} via SSH to {self.ssh_host}")
+
             # Construct Recon-ng command
             commands = [
                 f"recon-ng -w {target.replace('.', '_')}",
@@ -85,12 +95,14 @@ class ReconNGTool(OSINTTool):
                 self.ssh_host,
                 username=self.ssh_user,
                 client_keys=[self.ssh_key_path] if os.path.exists(self.ssh_key_path) else None,
-                known_hosts=None  # Warning: Disables host key verification
+                known_hosts=None  # Note: Disables host key verification for lab environment
             ) as conn:
                 result = await conn.run(command, check=False)
 
                 self.results = self._parse_output(result.stdout)
                 self.status = "completed"
+
+                logger.info(f"Recon-ng completed for {target}: {len(self.results)} hosts found")
 
                 return {
                     "tool": self.name,
@@ -104,6 +116,7 @@ class ReconNGTool(OSINTTool):
         except Exception as e:
             self.status = "error"
             self.error = str(e)
+            logger.error(f"Recon-ng error for {target}: {e}")
             return {
                 "tool": self.name,
                 "target": target,
@@ -142,7 +155,7 @@ class TheHarvesterTool(OSINTTool):
             self.enabled = False
 
     async def execute(self, target: str, options: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Execute TheHarvester in Docker container"""
+        """Execute TheHarvester in Docker container (async with executor)"""
         self.status = "running"
         self.error = None
 
@@ -150,17 +163,26 @@ class TheHarvesterTool(OSINTTool):
             # Default sources
             sources = options.get("sources", "google,bing,duckduckgo") if options else "google,bing,duckduckgo"
 
-            # Run container
-            container = self.docker_client.containers.run(
-                "theharvester:latest",
-                f"-d {target} -b {sources}",
-                remove=True,
-                detach=False
+            logger.info(f"Running TheHarvester for {target}")
+
+            # Run blocking Docker operation in thread pool executor
+            loop = asyncio.get_event_loop()
+            container = await loop.run_in_executor(
+                docker_executor,
+                lambda: self.docker_client.containers.run(
+                    "theharvester:latest",
+                    f"-d {target} -b {sources}",
+                    remove=True,
+                    detach=False,
+                    network_mode="host"
+                )
             )
 
             output = container.decode('utf-8')
             self.results = self._parse_output(output, target)
             self.status = "completed"
+
+            logger.info(f"TheHarvester completed for {target}: {len(self.results)} results")
 
             return {
                 "tool": self.name,
@@ -174,6 +196,7 @@ class TheHarvesterTool(OSINTTool):
         except Exception as e:
             self.status = "error"
             self.error = str(e)
+            logger.error(f"TheHarvester error for {target}: {e}")
             return {
                 "tool": self.name,
                 "target": target,
@@ -216,22 +239,31 @@ class SherlockTool(OSINTTool):
             self.enabled = False
 
     async def execute(self, target: str, options: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Execute Sherlock in Docker container"""
+        """Execute Sherlock in Docker container (async with executor)"""
         self.status = "running"
         self.error = None
 
         try:
-            # Run container
-            container = self.docker_client.containers.run(
-                "sherlock/sherlock:latest",
-                target,
-                remove=True,
-                detach=False
+            logger.info(f"Running Sherlock for username: {target}")
+
+            # Run blocking Docker operation in thread pool executor
+            loop = asyncio.get_event_loop()
+            container = await loop.run_in_executor(
+                docker_executor,
+                lambda: self.docker_client.containers.run(
+                    "sherlock/sherlock:latest",
+                    target,
+                    remove=True,
+                    detach=False,
+                    network_mode="host"
+                )
             )
 
             output = container.decode('utf-8')
             self.results = self._parse_output(output, target)
             self.status = "completed"
+
+            logger.info(f"Sherlock completed for {target}: {len(self.results)} profiles found")
 
             return {
                 "tool": self.name,
@@ -245,6 +277,7 @@ class SherlockTool(OSINTTool):
         except Exception as e:
             self.status = "error"
             self.error = str(e)
+            logger.error(f"Sherlock error for {target}: {e}")
             return {
                 "tool": self.name,
                 "target": target,
@@ -287,11 +320,13 @@ class SpiderFootTool(OSINTTool):
         self.api_key = os.getenv("SPIDERFOOT_API_KEY", "")
 
     async def execute(self, target: str, options: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Execute SpiderFoot scan via API"""
+        """Execute SpiderFoot scan via API with polling"""
         self.status = "running"
         self.error = None
 
         try:
+            logger.info(f"Running SpiderFoot for {target}")
+
             async with httpx.AsyncClient(timeout=300.0) as client:
                 # Start scan
                 scan_payload = {
@@ -312,9 +347,26 @@ class SpiderFootTool(OSINTTool):
                     raise Exception(f"SpiderFoot API error: {response.status_code}")
 
                 scan_id = response.json().get("id")
+                logger.info(f"SpiderFoot scan started: {scan_id}")
 
-                # Poll for completion (simplified - in production, use webhooks)
-                await asyncio.sleep(10)  # Give it time to run
+                # Poll for completion with exponential backoff
+                max_attempts = 6
+                for attempt in range(max_attempts):
+                    wait_time = min(2 ** attempt, 30)  # Max 30 seconds
+                    logger.debug(f"Waiting {wait_time}s before polling SpiderFoot (attempt {attempt + 1}/{max_attempts})")
+                    await asyncio.sleep(wait_time)
+
+                    # Check scan status
+                    status_response = await client.get(
+                        f"{self.api_url}/api",
+                        params={"func": "scanstatus", "id": scan_id},
+                        headers={"X-API-Key": self.api_key} if self.api_key else {}
+                    )
+
+                    if status_response.status_code == 200:
+                        status_data = status_response.json()
+                        if status_data.get("status") == "FINISHED":
+                            break
 
                 # Get results
                 result_response = await client.get(
@@ -325,6 +377,8 @@ class SpiderFootTool(OSINTTool):
 
                 self.results = result_response.json()
                 self.status = "completed"
+
+                logger.info(f"SpiderFoot completed for {target}")
 
                 return {
                     "tool": self.name,
@@ -338,6 +392,7 @@ class SpiderFootTool(OSINTTool):
         except Exception as e:
             self.status = "error"
             self.error = str(e)
+            logger.error(f"SpiderFoot error for {target}: {e}")
             return {
                 "tool": self.name,
                 "target": target,

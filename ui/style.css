@@ -672,6 +672,67 @@ small {
 }
 
 /* ============================================================================
+   AI Chat Assistant
+   ========================================================================== */
+
+.chat-container {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.chat-messages {
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    padding: 1rem;
+    background: var(--bg-tertiary);
+}
+
+.chat-message {
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    border-radius: 0.375rem;
+    line-height: 1.5;
+}
+
+.chat-message.user {
+    background: var(--primary);
+    color: white;
+    margin-left: 20%;
+}
+
+.chat-message.assistant {
+    background: var(--bg);
+    border-left: 3px solid var(--primary);
+}
+
+.chat-message.loading {
+    opacity: 0.7;
+}
+
+.typing-indicator {
+    font-style: italic;
+    animation: pulse 2s infinite;
+}
+
+.chat-input-container {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-end;
+}
+
+.chat-input-container textarea {
+    flex: 1;
+}
+
+.chat-input-container .btn {
+    height: fit-content;
+}
+
+/* ============================================================================
    Responsive Updates
    ========================================================================== */
 
@@ -684,5 +745,18 @@ small {
         flex-direction: column;
         align-items: start;
         gap: 0.5rem;
+    }
+
+    .chat-message.user {
+        margin-left: 0;
+    }
+
+    .chat-input-container {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .chat-input-container .btn {
+        width: 100%;
     }
 }
