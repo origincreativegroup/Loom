@@ -1,5 +1,15 @@
-# Environment variables
+# Environment variables and secrets
 .env
+.env.local
+.env.*.local
+.env.production
+*.key
+*.pem
+
+# SSH keys and certificates
+keys/
+*.pub
+known_hosts
 
 # Data directory (cases and reports)
 data/
@@ -8,6 +18,13 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+
+# Python virtual environments
+venv/
+ENV/
+env/
+.venv
+*.egg-info/
 
 # IDE
 .vscode/
@@ -22,6 +39,25 @@ Thumbs.db
 
 # Logs
 *.log
+*.sqlite
+*.db
 
 # Docker
 .docker/
+docker-compose.override.yml
+
+# Backups
+*_backup.*
+*.bak
+*.backup
+*_v1_backup.*
+*_v2_backup.*
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Security
+.secrets.baseline

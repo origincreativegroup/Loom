@@ -1,0 +1,102 @@
+services:
+  loom-api:
+    image: python:3.11-slim
+    container_name: loom-api-prod
+    working_dir: /app
+    volumes:
+      - ./app:/app:ro  # Read-only in production
+      - ./data:/data
+      # Mount SSH keys for Recon-ng access to pi-core (read-only)
+      - ./keys:/app/keys:ro
+      # Mount Docker socket for TheHarvester and Sherlock
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # Read-only socket
+    env_file:
+      - ./.env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - ENVIRONMENT=production
+    ports:
+      - "8787:8787"
+    command: >
+      sh -c "pip install --no-cache-dir -r requirements.txt
+      && uvicorn main:app --host 0.0.0.0 --port 8787 --workers 4 --proxy-headers"
+    restart: always
+    # Resource limits for production
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8787/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    read_only: false  # Can't be fully read-only due to Python bytecode
+    tmpfs:
+      - /tmp:size=100M,noexec,nosuid,nodev
+    # Allow DNS resolution of .lan domains
+    dns:
+      - 192.168.50.70
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  loom-ui:
+    image: nginx:alpine
+    container_name: loom-ui-prod
+    volumes:
+      - ./ui:/usr/share/nginx/html:ro
+      - ./nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro  # Custom nginx config
+    ports:
+      - "8788:80"
+    restart: always
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 32M
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=10M,noexec,nosuid,nodev
+      - /var/run:size=1M,noexec,nosuid,nodev
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+# Production network configuration
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24

@@ -1,6 +1,7 @@
 """
 Loom v2 - OSINT Orchestration Platform
 Unified interface for local OSINT tools on pi-net
+Production-hardened version with security, monitoring, and reliability features
 """
 
 import os
@@ -9,6 +10,7 @@ import uuid
 import asyncio
 import asyncpg
 import logging
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -16,9 +18,16 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 
 import httpx
-from fastapi import FastAPI, HTTPException, Header, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Header, Depends, WebSocket, WebSocketDisconnect, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, validator, constr, EmailStr
+from pythonjsonlogger import jsonlogger
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 import aiofiles
 
 # Import OSINT tool integrations
@@ -28,21 +37,39 @@ from osint_tools import ToolRegistry
 # Logging Configuration
 # ============================================================================
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# Configure structured JSON logging for production
+log_handler = logging.StreamHandler()
+formatter = jsonlogger.JsonFormatter(
+    '%(asctime)s %(name)s %(levelname)s %(message)s %(pathname)s %(lineno)d'
 )
+log_handler.setFormatter(formatter)
+
 logger = logging.getLogger("loom")
+logger.addHandler(log_handler)
+logger.setLevel(logging.INFO)
+
+# Suppress overly verbose logs from libraries
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("asyncio").setLevel(logging.WARNING)
 
 # ============================================================================
 # Configuration
 # ============================================================================
 
+# Core Configuration
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://192.168.50.157:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 CASES_DIR = DATA_DIR / "cases"
 API_KEY = os.getenv("OSINT_API_KEY", "")
+
+# Security Configuration
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8788,http://localhost:3000").split(",")
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1,loom.lan,*.lan").split(",")
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")  # development, staging, production
+MAX_TARGET_LENGTH = int(os.getenv("MAX_TARGET_LENGTH", "255"))
+MAX_TITLE_LENGTH = int(os.getenv("MAX_TITLE_LENGTH", "200"))
+MAX_DESCRIPTION_LENGTH = int(os.getenv("MAX_DESCRIPTION_LENGTH", "1000"))
 
 # Database configuration
 COUCHDB_URL = os.getenv("COUCHDB_URL", "https://couchdb.lan")
@@ -62,10 +89,64 @@ CASES_DIR.mkdir(parents=True, exist_ok=True)
 # Initialize tool registry
 tool_registry = ToolRegistry()
 
+# Rate limiting
+limiter = Limiter(key_func=get_remote_address)
+
 # Global resources
 pg_pool = None
 http_client = None
 health_cache = {"data": None, "expires": None}
+
+# ============================================================================
+# Prometheus Metrics
+# ============================================================================
+
+# Request metrics
+http_requests_total = Counter(
+    'loom_http_requests_total',
+    'Total HTTP requests',
+    ['method', 'endpoint', 'status']
+)
+
+http_request_duration_seconds = Histogram(
+    'loom_http_request_duration_seconds',
+    'HTTP request duration in seconds',
+    ['method', 'endpoint']
+)
+
+# Business metrics
+cases_created_total = Counter(
+    'loom_cases_created_total',
+    'Total cases created'
+)
+
+cases_completed_total = Counter(
+    'loom_cases_completed_total',
+    'Total cases completed successfully'
+)
+
+cases_failed_total = Counter(
+    'loom_cases_failed_total',
+    'Total cases failed'
+)
+
+tools_executed_total = Counter(
+    'loom_tools_executed_total',
+    'Total OSINT tools executed',
+    ['tool_name', 'status']
+)
+
+active_cases = Gauge(
+    'loom_active_cases',
+    'Number of currently active cases'
+)
+
+# System metrics
+db_connections = Gauge(
+    'loom_db_connections',
+    'Active database connections',
+    ['database']
+)
 
 # ============================================================================
 # Lifespan Context Manager
@@ -96,12 +177,15 @@ async def lifespan(app: FastAPI):
         logger.warning(f"⚠️  PostgreSQL unavailable: {e}")
 
     # Initialize shared HTTP client with connection pooling
+    # Note: verify=False for internal .lan domains - in production with proper certs, set verify=True
+    ssl_verify = ENVIRONMENT == "production"
     http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(30.0, connect=10.0),
         limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
-        verify=False
+        verify=ssl_verify,
+        follow_redirects=True
     )
-    logger.info("✅ HTTP client initialized")
+    logger.info(f"✅ HTTP client initialized (SSL verify: {ssl_verify})")
 
     logger.info("✅ Loom initialization complete")
 
@@ -127,18 +211,125 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Loom OSINT Orchestration Platform",
     description="Unified interface for local OSINT tools",
-    version="2.0.0",
-    lifespan=lifespan
+    version="2.1.0",
+    lifespan=lifespan,
+    docs_url="/docs" if ENVIRONMENT != "production" else None,  # Disable docs in production
+    redoc_url="/redoc" if ENVIRONMENT != "production" else None
 )
 
-# CORS for local development
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# CORS - Restrict origins in production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key", "Authorization", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
 )
+
+# Trusted hosts middleware - prevent host header attacks
+if ENVIRONMENT == "production":
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+
+
+# ============================================================================
+# Security Middleware
+# ============================================================================
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add security headers to all responses"""
+    response = await call_next(request)
+
+    # Security headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+
+    # HSTS for production
+    if ENVIRONMENT == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+    # CSP
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none';"
+    )
+
+    return response
+
+
+@app.middleware("http")
+async def request_tracking_middleware(request: Request, call_next):
+    """Add request ID tracking and metrics"""
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+
+    # Add request ID to logging context
+    with logger.contextualize(request_id=request_id):
+        start_time = datetime.utcnow()
+
+        try:
+            response = await call_next(request)
+            response.headers["X-Request-ID"] = request_id
+
+            # Record metrics
+            duration = (datetime.utcnow() - start_time).total_seconds()
+            http_requests_total.labels(
+                method=request.method,
+                endpoint=request.url.path,
+                status=response.status_code
+            ).inc()
+
+            http_request_duration_seconds.labels(
+                method=request.method,
+                endpoint=request.url.path
+            ).observe(duration)
+
+            logger.info(
+                f"{request.method} {request.url.path}",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": response.status_code,
+                    "duration_seconds": duration,
+                    "request_id": request_id,
+                    "client_ip": request.client.host if request.client else "unknown"
+                }
+            )
+
+            return response
+
+        except Exception as e:
+            logger.error(
+                f"Request failed: {str(e)}",
+                extra={
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "error": str(e)
+                },
+                exc_info=True
+            )
+            raise
+
+
+# Monkeypatch logger.contextualize if not available
+if not hasattr(logger, 'contextualize'):
+    from contextlib import contextmanager
+    @contextmanager
+    def contextualize(self, **kwargs):
+        yield
+    logger.contextualize = lambda **kwargs: contextualize(logger, **kwargs)
 
 # ============================================================================
 # Security
@@ -151,28 +342,112 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)):
     return True
 
 # ============================================================================
+# Input Validation Helpers
+# ============================================================================
+
+def sanitize_string(value: str) -> str:
+    """Sanitize user input to prevent injection attacks"""
+    if not value:
+        return value
+    # Remove control characters and potential injection patterns
+    value = re.sub(r'[\x00-\x1F\x7F]', '', value)
+    # Remove common injection patterns
+    dangerous_patterns = [';', '&&', '||', '`', '$(',  '${']
+    for pattern in dangerous_patterns:
+        if pattern in value:
+            raise ValueError(f"Input contains potentially dangerous pattern: {pattern}")
+    return value.strip()
+
+
+def validate_target(value: str) -> str:
+    """Validate OSINT target format"""
+    value = sanitize_string(value)
+
+    # Check length
+    if len(value) > MAX_TARGET_LENGTH:
+        raise ValueError(f"Target exceeds maximum length of {MAX_TARGET_LENGTH}")
+
+    # Validate format: domain, IP, email, or username
+    # Domain/subdomain pattern
+    domain_pattern = r'^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+    # IP address pattern
+    ip_pattern = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+    # Email pattern (basic)
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    # Username pattern (alphanumeric with limited special chars)
+    username_pattern = r'^[a-zA-Z0-9_\-\.]{3,50}$'
+
+    if not (re.match(domain_pattern, value) or
+            re.match(ip_pattern, value) or
+            re.match(email_pattern, value) or
+            re.match(username_pattern, value)):
+        raise ValueError(
+            "Target must be a valid domain, IP address, email, or username"
+        )
+
+    return value
+
+
+# ============================================================================
 # Models
 # ============================================================================
 
 class ToolSelection(BaseModel):
     """Tool selection and options"""
-    name: str
+    name: constr(min_length=1, max_length=50)
     enabled: bool = True
     options: Dict[str, Any] = Field(default_factory=dict)
 
+    @validator('name')
+    def validate_tool_name(cls, v):
+        # Only allow alphanumeric and hyphens
+        if not re.match(r'^[a-z0-9\-]+$', v):
+            raise ValueError("Tool name must contain only lowercase letters, numbers, and hyphens")
+        return v
+
+
 class CaseCreate(BaseModel):
     """Request to create a new case"""
-    title: str = Field(..., description="Case title/subject")
-    description: Optional[str] = Field(None, description="Case description")
-    target: str = Field(..., description="Investigation target (domain, IP, username, etc.)")
-    tools: List[str] = Field(
+    title: constr(min_length=1, max_length=MAX_TITLE_LENGTH) = Field(
+        ...,
+        description="Case title/subject"
+    )
+    description: Optional[constr(max_length=MAX_DESCRIPTION_LENGTH)] = Field(
+        None,
+        description="Case description"
+    )
+    target: constr(min_length=3, max_length=MAX_TARGET_LENGTH) = Field(
+        ...,
+        description="Investigation target (domain, IP, username, etc.)"
+    )
+    tools: List[constr(min_length=1, max_length=50)] = Field(
         default=["searxng"],
-        description="Tools to execute: searxng, recon-ng, theharvester, sherlock, spiderfoot, intelowl"
+        description="Tools to execute: searxng, recon-ng, theharvester, sherlock, spiderfoot, intelowl",
+        min_items=1,
+        max_items=10
     )
     tool_options: Dict[str, Dict[str, Any]] = Field(
         default_factory=dict,
         description="Per-tool configuration options"
     )
+
+    @validator('title', 'description')
+    def sanitize_text_fields(cls, v):
+        if v:
+            return sanitize_string(v)
+        return v
+
+    @validator('target')
+    def validate_target_field(cls, v):
+        return validate_target(v)
+
+    @validator('tools')
+    def validate_tools_list(cls, v):
+        allowed_tools = {'searxng', 'recon-ng', 'theharvester', 'sherlock', 'spiderfoot', 'intelowl'}
+        for tool in v:
+            if tool not in allowed_tools:
+                raise ValueError(f"Unknown tool: {tool}. Allowed tools: {', '.join(allowed_tools)}")
+        return v
 
 class PipelineStatus(BaseModel):
     """Pipeline execution status"""
@@ -454,13 +729,21 @@ async def run_osint_pipeline(case_id: str, case_create: CaseCreate) -> Dict[str,
 # ============================================================================
 
 @app.get("/")
-async def root():
+@limiter.limit("60/minute")
+async def root(request: Request):
     """Health check"""
     return {
         "service": "Loom OSINT Orchestration Platform",
         "status": "operational",
-        "version": "2.0.0"
+        "version": "2.1.0",
+        "environment": ENVIRONMENT
     }
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint"""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.get("/health")
 async def health():
@@ -528,18 +811,24 @@ async def health():
     return health_status
 
 @app.get("/tools", dependencies=[Depends(verify_api_key)])
-async def list_tools():
+@limiter.limit("30/minute")
+async def list_tools(request: Request):
     """List all available OSINT tools and their status"""
     return {
         "tools": tool_registry.get_all_tools_status()
     }
 
 @app.post("/cases", response_model=PipelineStatus, dependencies=[Depends(verify_api_key)])
-async def create_case(case_create: CaseCreate):
+@limiter.limit("10/minute")  # Limit case creation to prevent abuse
+async def create_case(request: Request, case_create: CaseCreate):
     """Create a new case and run the OSINT orchestration pipeline"""
 
     case_id = str(uuid.uuid4())[:8]
     logger.info(f"🔍 Creating new case {case_id}: {case_create.title}")
+
+    # Track metrics
+    cases_created_total.inc()
+    active_cases.inc()
 
     try:
         await run_osint_pipeline(case_id, case_create)
@@ -551,10 +840,15 @@ async def create_case(case_create: CaseCreate):
         for result in case_metadata.get("tool_results", []):
             if result.get("status") == "success":
                 tools_completed.append(result.get("tool"))
+                tools_executed_total.labels(tool_name=result.get("tool"), status="success").inc()
             else:
                 tools_failed.append(result.get("tool"))
+                tools_executed_total.labels(tool_name=result.get("tool"), status="error").inc()
 
         logger.info(f"✅ Case {case_id} completed: {len(tools_completed)} succeeded, {len(tools_failed)} failed")
+
+        cases_completed_total.inc()
+        active_cases.dec()
 
         return PipelineStatus(
             case_id=case_id,
@@ -569,6 +863,10 @@ async def create_case(case_create: CaseCreate):
     except Exception as e:
         logger.error(f"❌ Case {case_id} failed: {e}", exc_info=True)
         await log_to_postgres(case_id, "loom", "error", "pipeline_failed", {"error": str(e)})
+
+        cases_failed_total.inc()
+        active_cases.dec()
+
         return PipelineStatus(
             case_id=case_id,
             status="error",
@@ -578,7 +876,8 @@ async def create_case(case_create: CaseCreate):
         )
 
 @app.get("/cases", dependencies=[Depends(verify_api_key)])
-async def list_cases():
+@limiter.limit("60/minute")
+async def list_cases(request: Request):
     """List all cases"""
     cases = []
 
@@ -599,7 +898,8 @@ async def list_cases():
     return {"cases": cases}
 
 @app.get("/cases/{case_id}", dependencies=[Depends(verify_api_key)])
-async def get_case(case_id: str):
+@limiter.limit("60/minute")
+async def get_case(request: Request, case_id: str):
     """Get case details"""
     metadata = await load_case_metadata(case_id)
 
@@ -609,7 +909,8 @@ async def get_case(case_id: str):
     return metadata
 
 @app.get("/cases/{case_id}/report", dependencies=[Depends(verify_api_key)])
-async def get_report(case_id: str):
+@limiter.limit("60/minute")
+async def get_report(request: Request, case_id: str):
     """Get case report"""
     report_file = CASES_DIR / case_id / "report.md"
 
@@ -622,7 +923,8 @@ async def get_report(case_id: str):
     return {"case_id": case_id, "report": report}
 
 @app.get("/cases/{case_id}/tools/{tool_name}", dependencies=[Depends(verify_api_key)])
-async def get_tool_results(case_id: str, tool_name: str):
+@limiter.limit("60/minute")
+async def get_tool_results(request: Request, case_id: str, tool_name: str):
     """Get results from a specific tool"""
     tool_file = CASES_DIR / case_id / "tools" / f"{tool_name}.json"
 
@@ -656,12 +958,13 @@ async def get_config():
     }
 
 @app.post("/chat", dependencies=[Depends(verify_api_key)])
-async def chat_with_assistant(request: Dict[str, Any]):
+@limiter.limit("20/minute")  # More restrictive for AI endpoints
+async def chat_with_assistant(request: Request, payload: Dict[str, Any]):
     """
     AI Research Assistant endpoint - helps with target research and OSINT strategy
     """
-    user_message = request.get("message", "")
-    context = request.get("context", {})  # Can include current target, case info, etc.
+    user_message = payload.get("message", "")
+    context = payload.get("context", {})  # Can include current target, case info, etc.
 
     if not user_message:
         raise HTTPException(status_code=400, detail="Message is required")
