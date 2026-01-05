@@ -3,15 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Loom - OSINT Orchestration Platform</title>
+    <title>Loom - OSINT Console</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
         <header>
             <h1>🕸️ Loom</h1>
-            <p class="tagline">OSINT Orchestration Platform</p>
-            <p class="version">v2.0 - Unified Tool Interface</p>
+            <p class="tagline">Local-first OSINT Console</p>
             <div class="health-status" id="health-status">
                 <span class="status-dot" id="status-dot"></span>
                 <span id="status-text">Checking services...</span>
@@ -29,7 +28,7 @@
                             type="text"
                             id="case-title"
                             name="title"
-                            placeholder="e.g., Background check on example.com"
+                            placeholder="e.g., Background check on XYZ Corporation"
                             required
                         >
                     </div>
@@ -39,68 +38,48 @@
                         <textarea
                             id="case-description"
                             name="description"
-                            rows="2"
+                            rows="3"
                             placeholder="Optional: Provide context for the investigation"
                         ></textarea>
                     </div>
 
                     <div class="form-group">
-                        <label for="target">Target *</label>
+                        <label for="initial-query">Initial Query *</label>
                         <input
                             type="text"
-                            id="target"
-                            name="target"
-                            placeholder="Domain, IP, username, email, etc."
+                            id="initial-query"
+                            name="initial_query"
+                            placeholder="e.g., XYZ Corporation cybersecurity incidents"
                             required
                         >
-                        <small>Examples: example.com, 192.168.1.1, @username, email@domain.com</small>
-                    </div>
-
-                    <!-- Tool Selection -->
-                    <div class="form-group">
-                        <label>Select OSINT Tools</label>
-                        <div class="tool-grid" id="tool-grid">
-                            <!-- Tools will be dynamically loaded -->
-                            <div class="tool-option loading">Loading tools...</div>
-                        </div>
                     </div>
 
                     <button type="submit" class="btn btn-primary" id="submit-btn">
-                        Run OSINT Pipeline
+                        Run Pipeline
                     </button>
                 </form>
 
                 <div class="pipeline-status" id="pipeline-status" style="display: none;">
                     <div class="spinner"></div>
                     <p id="status-message">Initializing pipeline...</p>
-                    <div class="tool-progress" id="tool-progress"></div>
                 </div>
             </section>
 
             <!-- Case Results -->
             <section class="card" id="results-section" style="display: none;">
                 <div class="results-header">
-                    <h2>Investigation Results</h2>
-                    <button class="btn btn-secondary" id="new-case-btn">New Investigation</button>
+                    <h2>Case Results</h2>
+                    <button class="btn btn-secondary" id="new-case-btn">New Case</button>
                 </div>
 
                 <div class="case-info">
                     <p><strong>Case ID:</strong> <span id="result-case-id"></span></p>
                     <p><strong>Title:</strong> <span id="result-title"></span></p>
-                    <p><strong>Target:</strong> <span id="result-target"></span></p>
-                    <p><strong>Status:</strong> <span id="result-status" class="status-badge"></span></p>
-                    <p><strong>Tools:</strong> <span id="result-tools"></span></p>
+                    <p><strong>Status:</strong> <span id="result-status"></span></p>
                 </div>
 
-                <!-- Tool-by-Tool Results -->
-                <div class="tool-results">
-                    <h3>Tool Results</h3>
-                    <div id="individual-tool-results"></div>
-                </div>
-
-                <!-- Unified Report -->
                 <div class="report-container">
-                    <h3>Unified Intelligence Report</h3>
+                    <h3>Intelligence Report</h3>
                     <div id="report-content" class="report-content"></div>
                 </div>
             </section>
@@ -115,7 +94,7 @@
         </main>
 
         <footer>
-            <p>Loom OSINT Orchestration Platform v2.0 | Powered by Ollama + Local OSINT Tools</p>
+            <p>Powered by Ollama + SearXNG | Loom MVP v1.0</p>
         </footer>
     </div>
 

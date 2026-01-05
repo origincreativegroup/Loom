@@ -1,43 +1,64 @@
 """
-Loom MVP - OSINT Console Backend
-Local-first OSINT pipeline powered by Ollama and SearXNG
+Loom v2 - OSINT Orchestration Platform
+Unified interface for local OSINT tools on pi-net
 """
 
 import os
 import json
 import uuid
+import asyncpg
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import aiofiles
+
+# Import OSINT tool integrations
+from osint_tools import ToolRegistry
 
 # ============================================================================
 # Configuration
 # ============================================================================
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://pi-forge.nexus.lan:11434")
-SEARXNG_URL = os.getenv("SEARXNG_URL", "https://searxng.lan")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://192.168.50.157:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 CASES_DIR = DATA_DIR / "cases"
 API_KEY = os.getenv("OSINT_API_KEY", "")
 
+# Database configuration
+COUCHDB_URL = os.getenv("COUCHDB_URL", "https://couchdb.lan")
+COUCHDB_USER = os.getenv("COUCHDB_USER", "admin")
+COUCHDB_PASS = os.getenv("COUCHDB_PASS", "")
+COUCHDB_DB = os.getenv("COUCHDB_DB", "osint_scans")
+
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "192.168.50.168")
+POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5433"))
+POSTGRES_DB = os.getenv("POSTGRES_DB", "automation")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
+POSTGRES_PASS = os.getenv("POSTGRES_PASS", "")
+
 # Ensure data directories exist
 CASES_DIR.mkdir(parents=True, exist_ok=True)
+
+# Initialize tool registry
+tool_registry = ToolRegistry()
+
+# PostgreSQL connection pool
+pg_pool = None
 
 # ============================================================================
 # FastAPI App
 # ============================================================================
 
 app = FastAPI(
-    title="Loom OSINT API",
-    description="Local-first OSINT console powered by Ollama",
-    version="1.0.0"
+    title="Loom OSINT Orchestration Platform",
+    description="Unified interface for local OSINT tools",
+    version="2.0.0"
 )
 
 # CORS for local development
@@ -48,6 +69,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ============================================================================
+# Lifecycle Events
+# ============================================================================
+
+@app.on_event("startup")
+async def startup():
+    """Initialize database connections"""
+    global pg_pool
+    try:
+        pg_pool = await asyncpg.create_pool(
+            host=POSTGRES_HOST,
+            port=POSTGRES_PORT,
+            database=POSTGRES_DB,
+            user=POSTGRES_USER,
+            password=POSTGRES_PASS,
+            min_size=1,
+            max_size=5
+        )
+    except Exception as e:
+        print(f"Warning: Could not connect to PostgreSQL: {e}")
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Close database connections"""
+    if pg_pool:
+        await pg_pool.close()
 
 # ============================================================================
 # Security
@@ -63,29 +111,33 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)):
 # Models
 # ============================================================================
 
+class ToolSelection(BaseModel):
+    """Tool selection and options"""
+    name: str
+    enabled: bool = True
+    options: Dict[str, Any] = Field(default_factory=dict)
+
 class CaseCreate(BaseModel):
     """Request to create a new case"""
     title: str = Field(..., description="Case title/subject")
     description: Optional[str] = Field(None, description="Case description")
-    initial_query: str = Field(..., description="Initial research query")
-
-class QueryPlan(BaseModel):
-    """Ollama-generated query plan"""
-    queries: List[str] = Field(default_factory=list)
-    reasoning: Optional[str] = None
-
-class SearchResult(BaseModel):
-    """Individual search result"""
-    title: str
-    url: str
-    content: str
-    engine: Optional[str] = None
+    target: str = Field(..., description="Investigation target (domain, IP, username, etc.)")
+    tools: List[str] = Field(
+        default=["searxng"],
+        description="Tools to execute: searxng, recon-ng, theharvester, sherlock, spiderfoot, intelowl"
+    )
+    tool_options: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Per-tool configuration options"
+    )
 
 class PipelineStatus(BaseModel):
     """Pipeline execution status"""
     case_id: str
     status: str
     stage: str
+    tools_completed: List[str] = Field(default_factory=list)
+    tools_failed: List[str] = Field(default_factory=list)
     message: Optional[str] = None
     report_ready: bool = False
 
@@ -94,8 +146,51 @@ class CaseInfo(BaseModel):
     case_id: str
     title: str
     description: Optional[str]
+    target: str
+    tools_used: List[str]
     created_at: str
     status: str
+
+class ToolStatus(BaseModel):
+    """Individual tool status"""
+    name: str
+    enabled: bool
+    status: str
+    results_count: int
+    error: Optional[str]
+
+# ============================================================================
+# Database Functions
+# ============================================================================
+
+async def log_to_postgres(case_id: str, tool_name: str, status: str, step: str, details: Dict[str, Any] = None):
+    """Log activity to PostgreSQL osint_logs table"""
+    if not pg_pool:
+        return
+
+    try:
+        async with pg_pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO osint_logs (correlation_id, tool_name, status, step, details, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6)
+            """, case_id, tool_name, status, step, json.dumps(details or {}), datetime.utcnow())
+    except Exception as e:
+        print(f"PostgreSQL log error: {e}")
+
+async def save_to_couchdb(case_id: str, case_data: Dict[str, Any]):
+    """Save case to CouchDB osint_scans database"""
+    try:
+        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+            response = await client.put(
+                f"{COUCHDB_URL}/{COUCHDB_DB}/{case_id}",
+                json=case_data,
+                auth=(COUCHDB_USER, COUCHDB_PASS) if COUCHDB_USER else None
+            )
+
+            if response.status_code not in [201, 202]:
+                print(f"CouchDB save error: {response.status_code}")
+    except Exception as e:
+        print(f"CouchDB save error: {e}")
 
 # ============================================================================
 # Ollama Integration
@@ -131,103 +226,45 @@ async def call_ollama(prompt: str, system: Optional[str] = None, json_mode: bool
             detail=f"Ollama API error: {str(e)}"
         )
 
-async def generate_query_plan(case_description: str, initial_query: str) -> QueryPlan:
-    """Generate search query plan using Ollama"""
+async def synthesize_unified_report(case_data: Dict[str, Any], tool_results: List[Dict[str, Any]]) -> str:
+    """Synthesize results from multiple OSINT tools into unified report"""
 
-    system_prompt = """You are an OSINT research assistant. Given a research objective, generate a strategic list of search queries to gather comprehensive information.
+    system_prompt = """You are an expert OSINT analyst. Synthesize the provided results from multiple OSINT tools into a comprehensive, well-structured intelligence report.
 
-Output ONLY valid JSON in this exact format:
-{
-  "reasoning": "brief explanation of the search strategy",
-  "queries": ["query 1", "query 2", "query 3"]
-}
-
-Generate 3-5 specific, targeted search queries."""
-
-    user_prompt = f"""Research Objective: {case_description}
-
-Initial Query: {initial_query}
-
-Generate a strategic search plan with specific queries."""
-
-    try:
-        response = await call_ollama(user_prompt, system=system_prompt, json_mode=True)
-        plan_data = json.loads(response)
-        return QueryPlan(**plan_data)
-
-    except json.JSONDecodeError:
-        # Fallback: use the initial query
-        return QueryPlan(
-            queries=[initial_query],
-            reasoning="Using initial query as fallback"
-        )
-
-async def synthesize_report(case_data: Dict[str, Any], search_results: List[Dict]) -> str:
-    """Synthesize search results into a markdown report using Ollama"""
-
-    system_prompt = """You are an OSINT analyst. Synthesize the provided search results into a comprehensive, well-structured intelligence report.
+The results come from various tools (SearXNG, Recon-ng, TheHarvester, Sherlock, SpiderFoot, IntelOwl).
 
 Format your report in markdown with:
 - Executive Summary
-- Key Findings (organized by theme)
-- Detailed Analysis
+- Key Findings (organized by category: Infrastructure, People, Social Media, Threats, etc.)
+- Tool-by-Tool Analysis
+- Cross-Reference Analysis (correlations between different tool findings)
+- Recommendations
 - Sources
 
-Be factual, cite sources, and highlight information gaps."""
+Be factual, cite the tool that provided each finding, and highlight information gaps."""
 
-    # Prepare search results summary
+    # Organize results by tool
     results_text = "\n\n".join([
-        f"### Result {i+1}\n**Title:** {r.get('title', 'N/A')}\n**URL:** {r.get('url', 'N/A')}\n**Content:** {r.get('content', 'N/A')[:500]}..."
-        for i, r in enumerate(search_results[:20])  # Limit to top 20 results
+        f"## {result.get('tool', 'Unknown Tool').upper()} Results\n" +
+        f"**Status:** {result.get('status', 'unknown')}\n" +
+        f"**Results Count:** {len(result.get('results', []))}\n" +
+        (f"**Error:** {result.get('error')}\n" if result.get('error') else "") +
+        "\n### Findings:\n" +
+        json.dumps(result.get('results', [])[:50], indent=2)  # Limit to 50 results per tool
+        for result in tool_results
     ])
 
-    user_prompt = f"""Case: {case_data.get('title')}
+    user_prompt = f"""Target: {case_data.get('target')}
+Case: {case_data.get('title')}
 Description: {case_data.get('description', 'N/A')}
 
-Search Results:
+Tool Results:
 {results_text}
 
-Generate a comprehensive OSINT report."""
+Generate a comprehensive unified OSINT intelligence report."""
 
     report = await call_ollama(user_prompt, system=system_prompt)
     return report
-
-# ============================================================================
-# SearXNG Integration
-# ============================================================================
-
-async def search_searxng(query: str, num_results: int = 10) -> List[SearchResult]:
-    """Search using SearXNG"""
-    try:
-        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
-            params = {
-                "q": query,
-                "format": "json",
-                "pageno": 1
-            }
-
-            response = await client.get(
-                f"{SEARXNG_URL}/search",
-                params=params
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            results = []
-            for item in data.get("results", [])[:num_results]:
-                results.append(SearchResult(
-                    title=item.get("title", ""),
-                    url=item.get("url", ""),
-                    content=item.get("content", ""),
-                    engine=item.get("engine")
-                ))
-
-            return results
-
-    except Exception as e:
-        # Return empty results on error (SearXNG might not be available)
-        print(f"SearXNG error: {e}")
-        return []
 
 # ============================================================================
 # Case Management
@@ -238,6 +275,7 @@ def create_case_directory(case_id: str) -> Path:
     case_dir = CASES_DIR / case_id
     case_dir.mkdir(parents=True, exist_ok=True)
     (case_dir / "raw").mkdir(exist_ok=True)
+    (case_dir / "tools").mkdir(exist_ok=True)
     return case_dir
 
 async def save_case_metadata(case_id: str, metadata: Dict[str, Any]):
@@ -259,21 +297,16 @@ async def load_case_metadata(case_id: str) -> Optional[Dict[str, Any]]:
         content = await f.read()
         return json.loads(content)
 
-async def save_search_results(case_id: str, results: List[SearchResult], query_idx: int):
-    """Save raw search results"""
+async def save_tool_results(case_id: str, tool_name: str, results: Dict[str, Any]):
+    """Save individual tool results"""
     case_dir = CASES_DIR / case_id
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    filename = f"searx_bundle_{query_idx}_{timestamp}.json"
+    tool_file = case_dir / "tools" / f"{tool_name}.json"
 
-    raw_file = case_dir / "raw" / filename
-
-    results_data = [r.dict() for r in results]
-
-    async with aiofiles.open(raw_file, "w") as f:
-        await f.write(json.dumps(results_data, indent=2))
+    async with aiofiles.open(tool_file, "w") as f:
+        await f.write(json.dumps(results, indent=2))
 
 async def save_report(case_id: str, report: str):
-    """Save final markdown report"""
+    """Save final unified markdown report"""
     case_dir = CASES_DIR / case_id
     report_file = case_dir / "report.md"
 
@@ -281,17 +314,17 @@ async def save_report(case_id: str, report: str):
         await f.write(report)
 
 # ============================================================================
-# Pipeline Orchestration
+# OSINT Pipeline Orchestration
 # ============================================================================
 
 async def run_osint_pipeline(case_id: str, case_create: CaseCreate) -> Dict[str, Any]:
     """
-    Execute the full OSINT pipeline:
+    Execute the unified OSINT pipeline:
     1. Create case
-    2. Generate query plan (Ollama)
-    3. Execute searches (SearXNG)
-    4. Synthesize report (Ollama)
-    5. Save results
+    2. Execute selected tools in parallel
+    3. Synthesize unified report with Ollama
+    4. Save results to filesystem, CouchDB, and PostgreSQL
+    5. Return case metadata
     """
 
     # 1. Create case structure
@@ -301,45 +334,54 @@ async def run_osint_pipeline(case_id: str, case_create: CaseCreate) -> Dict[str,
         "case_id": case_id,
         "title": case_create.title,
         "description": case_create.description,
-        "initial_query": case_create.initial_query,
+        "target": case_create.target,
+        "tools_requested": case_create.tools,
         "created_at": datetime.utcnow().isoformat(),
         "status": "processing"
     }
 
     await save_case_metadata(case_id, case_metadata)
+    await log_to_postgres(case_id, "loom", "started", "case_created", case_metadata)
 
-    # 2. Generate query plan
-    query_plan = await generate_query_plan(
-        case_create.description or case_create.title,
-        case_create.initial_query
+    # 2. Execute tools
+    await log_to_postgres(case_id, "loom", "running", "executing_tools", {"tools": case_create.tools})
+
+    tool_results = await tool_registry.execute_tools(
+        case_create.target,
+        case_create.tools,
+        case_create.tool_options
     )
 
-    case_metadata["query_plan"] = query_plan.dict()
-    await save_case_metadata(case_id, case_metadata)
+    # Save individual tool results
+    for result in tool_results:
+        tool_name = result.get("tool", "unknown")
+        await save_tool_results(case_id, tool_name, result)
+        await log_to_postgres(
+            case_id,
+            tool_name,
+            result.get("status", "unknown"),
+            "tool_completed",
+            {"results_count": len(result.get("results", []))}
+        )
 
-    # 3. Execute searches
-    all_results = []
-    for idx, query in enumerate(query_plan.queries):
-        results = await search_searxng(query, num_results=15)
-        all_results.extend(results)
-        await save_search_results(case_id, results, idx)
-
-    case_metadata["total_results"] = len(all_results)
+    case_metadata["tool_results"] = tool_results
     case_metadata["status"] = "synthesizing"
     await save_case_metadata(case_id, case_metadata)
 
-    # 4. Synthesize report
-    report = await synthesize_report(
-        case_metadata,
-        [r.dict() for r in all_results]
-    )
+    # 3. Synthesize unified report
+    await log_to_postgres(case_id, "loom", "running", "synthesizing_report")
 
+    report = await synthesize_unified_report(case_metadata, tool_results)
     await save_report(case_id, report)
 
-    # 5. Mark complete
+    # 4. Mark complete
     case_metadata["status"] = "completed"
     case_metadata["completed_at"] = datetime.utcnow().isoformat()
     await save_case_metadata(case_id, case_metadata)
+
+    # 5. Save to CouchDB
+    await save_to_couchdb(case_id, case_metadata)
+    await log_to_postgres(case_id, "loom", "completed", "pipeline_finished")
 
     return case_metadata
 
@@ -351,9 +393,9 @@ async def run_osint_pipeline(case_id: str, case_create: CaseCreate) -> Dict[str,
 async def root():
     """Health check"""
     return {
-        "service": "Loom OSINT API",
+        "service": "Loom OSINT Orchestration Platform",
         "status": "operational",
-        "version": "1.0.0"
+        "version": "2.0.0"
     }
 
 @app.get("/health")
@@ -362,7 +404,8 @@ async def health():
     health_status = {
         "api": "ok",
         "ollama": "unknown",
-        "searxng": "unknown"
+        "postgres": "ok" if pg_pool else "disabled",
+        "couchdb": "unknown"
     }
 
     # Check Ollama
@@ -374,35 +417,58 @@ async def health():
     except:
         health_status["ollama"] = "error"
 
-    # Check SearXNG
+    # Check CouchDB
     try:
         async with httpx.AsyncClient(timeout=5.0, verify=False) as client:
-            response = await client.get(SEARXNG_URL)
+            response = await client.get(
+                f"{COUCHDB_URL}/{COUCHDB_DB}",
+                auth=(COUCHDB_USER, COUCHDB_PASS) if COUCHDB_USER else None
+            )
             if response.status_code == 200:
-                health_status["searxng"] = "ok"
+                health_status["couchdb"] = "ok"
     except:
-        health_status["searxng"] = "error"
+        health_status["couchdb"] = "error"
 
     return health_status
 
+@app.get("/tools", dependencies=[Depends(verify_api_key)])
+async def list_tools():
+    """List all available OSINT tools and their status"""
+    return {
+        "tools": tool_registry.get_all_tools_status()
+    }
+
 @app.post("/cases", response_model=PipelineStatus, dependencies=[Depends(verify_api_key)])
 async def create_case(case_create: CaseCreate):
-    """Create a new case and run the OSINT pipeline"""
+    """Create a new case and run the OSINT orchestration pipeline"""
 
     case_id = str(uuid.uuid4())[:8]
 
     try:
         await run_osint_pipeline(case_id, case_create)
 
+        tools_completed = []
+        tools_failed = []
+
+        case_metadata = await load_case_metadata(case_id)
+        for result in case_metadata.get("tool_results", []):
+            if result.get("status") == "success":
+                tools_completed.append(result.get("tool"))
+            else:
+                tools_failed.append(result.get("tool"))
+
         return PipelineStatus(
             case_id=case_id,
             status="completed",
             stage="report_generated",
-            message="Pipeline completed successfully",
+            tools_completed=tools_completed,
+            tools_failed=tools_failed,
+            message=f"Pipeline completed: {len(tools_completed)} tools succeeded, {len(tools_failed)} failed",
             report_ready=True
         )
 
     except Exception as e:
+        await log_to_postgres(case_id, "loom", "error", "pipeline_failed", {"error": str(e)})
         return PipelineStatus(
             case_id=case_id,
             status="error",
@@ -424,6 +490,8 @@ async def list_cases():
                     case_id=metadata["case_id"],
                     title=metadata["title"],
                     description=metadata.get("description"),
+                    target=metadata.get("target", "N/A"),
+                    tools_used=metadata.get("tools_requested", []),
                     created_at=metadata["created_at"],
                     status=metadata.get("status", "unknown")
                 ))
@@ -453,14 +521,38 @@ async def get_report(case_id: str):
 
     return {"case_id": case_id, "report": report}
 
+@app.get("/cases/{case_id}/tools/{tool_name}", dependencies=[Depends(verify_api_key)])
+async def get_tool_results(case_id: str, tool_name: str):
+    """Get results from a specific tool"""
+    tool_file = CASES_DIR / case_id / "tools" / f"{tool_name}.json"
+
+    if not tool_file.exists():
+        raise HTTPException(status_code=404, detail=f"Results for {tool_name} not found")
+
+    async with aiofiles.open(tool_file, "r") as f:
+        results = await f.read()
+
+    return json.loads(results)
+
 @app.get("/config")
 async def get_config():
     """Get public configuration (for UI)"""
     return {
         "ollama_url": OLLAMA_URL,
         "ollama_model": OLLAMA_MODEL,
-        "searxng_url": SEARXNG_URL,
-        "api_key_required": bool(API_KEY)
+        "available_tools": [
+            {"name": "searxng", "description": "Web search via SearXNG"},
+            {"name": "recon-ng", "description": "Reconnaissance framework (subdomains, hosts)"},
+            {"name": "theharvester", "description": "Email and subdomain harvesting"},
+            {"name": "sherlock", "description": "Username search across social media"},
+            {"name": "spiderfoot", "description": "OSINT automation framework"},
+            {"name": "intelowl", "description": "Threat intelligence platform"}
+        ],
+        "api_key_required": bool(API_KEY),
+        "databases": {
+            "couchdb": bool(COUCHDB_URL),
+            "postgres": bool(pg_pool)
+        }
     }
 
 if __name__ == "__main__":

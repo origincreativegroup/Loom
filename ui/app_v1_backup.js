@@ -1,5 +1,5 @@
 /**
- * Loom OSINT Orchestration Platform - Frontend Application v2.0
+ * Loom OSINT Console - Frontend Application
  */
 
 // ============================================================================
@@ -11,7 +11,6 @@ const API_BASE_URL = window.location.hostname === 'localhost'
     : `http://${window.location.hostname}:8787`;
 
 let API_KEY = localStorage.getItem('loom_api_key') || '';
-let availableTools = [];
 
 // ============================================================================
 // Utility Functions
@@ -61,23 +60,20 @@ function hideElement(id) {
 }
 
 // ============================================================================
-// Markdown Rendering
+// Markdown Rendering (Simple)
 // ============================================================================
 
 function renderMarkdown(text) {
+    // Simple markdown rendering (for a production app, use marked.js or similar)
     let html = text
         // Headers
         .replace(/^### (.*$)/gim, '<h3>$1</h3>')
         .replace(/^## (.*$)/gim, '<h2>$1</h2>')
         .replace(/^# (.*$)/gim, '<h1>$1</h1>')
         // Bold
-        .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
+        .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
         // Italic
-        .replace(/\*(.*?)\*/gim, '<em>$1</em>')
-        // Code blocks
-        .replace(/```([^`]+)```/gim, '<pre><code>$1</code></pre>')
-        // Inline code
-        .replace(/`([^`]+)`/gim, '<code>$1</code>')
+        .replace(/\*(.*)\*/gim, '<em>$1</em>')
         // Links
         .replace(/\[([^\]]+)\]\(([^\)]+)\)/gim, '<a href="$2" target="_blank">$1</a>')
         // Line breaks
@@ -85,52 +81,6 @@ function renderMarkdown(text) {
         .replace(/\n/gim, '<br>');
 
     return `<p>${html}</p>`;
-}
-
-// ============================================================================
-// Tool Management
-// ============================================================================
-
-async function loadAvailableTools() {
-    try {
-        const config = await apiRequest('/config');
-        availableTools = config.available_tools || [];
-
-        renderToolSelection();
-    } catch (error) {
-        console.error('Error loading tools:', error);
-        document.getElementById('tool-grid').innerHTML =
-            '<p class="error-message">Failed to load tools</p>';
-    }
-}
-
-function renderToolSelection() {
-    const toolGrid = document.getElementById('tool-grid');
-
-    if (availableTools.length === 0) {
-        toolGrid.innerHTML = '<p>No tools available</p>';
-        return;
-    }
-
-    toolGrid.innerHTML = availableTools.map(tool => `
-        <label class="tool-option">
-            <input
-                type="checkbox"
-                name="tools"
-                value="${tool.name}"
-                ${tool.name === 'searxng' ? 'checked' : ''}
-            >
-            <div class="tool-info">
-                <div class="tool-name">${tool.name}</div>
-                <div class="tool-desc">${tool.description}</div>
-            </div>
-        </label>
-    `).join('');
-}
-
-function getSelectedTools() {
-    const checkboxes = document.querySelectorAll('input[name="tools"]:checked');
-    return Array.from(checkboxes).map(cb => cb.value);
 }
 
 // ============================================================================
@@ -144,15 +94,15 @@ async function checkHealth() {
     try {
         const health = await apiRequest('/health');
 
-        const servicesUp = Object.values(health).filter(v => v === 'ok').length;
-        const servicesTotal = Object.keys(health).length;
+        const ollama = health.ollama === 'ok';
+        const searxng = health.searxng === 'ok';
 
-        if (servicesUp === servicesTotal) {
+        if (ollama && searxng) {
             statusDot.className = 'status-dot healthy';
             statusText.textContent = 'All systems operational';
-        } else if (servicesUp > 0) {
+        } else if (ollama || searxng) {
             statusDot.className = 'status-dot degraded';
-            statusText.textContent = `${servicesUp}/${servicesTotal} services operational`;
+            statusText.textContent = 'Some services unavailable';
         } else {
             statusDot.className = 'status-dot error';
             statusText.textContent = 'Services offline';
@@ -171,21 +121,12 @@ async function createCase(caseData) {
     const submitBtn = document.getElementById('submit-btn');
     const statusDiv = document.getElementById('pipeline-status');
     const statusMessage = document.getElementById('status-message');
-    const toolProgress = document.getElementById('tool-progress');
 
     try {
         // Disable form
         submitBtn.disabled = true;
         showElement('pipeline-status');
         statusMessage.textContent = 'Starting OSINT pipeline...';
-
-        // Show tool progress
-        toolProgress.innerHTML = caseData.tools.map(tool => `
-            <div class="tool-status-item" id="tool-status-${tool}">
-                <span class="tool-name">${tool}</span>
-                <span class="tool-state">Queued</span>
-            </div>
-        `).join('');
 
         // Create case
         const result = await apiRequest('/cases', {
@@ -194,21 +135,19 @@ async function createCase(caseData) {
         });
 
         if (result.status === 'completed') {
-            statusMessage.textContent = 'Pipeline completed! Loading results...';
+            statusMessage.textContent = 'Pipeline completed! Loading report...';
 
-            // Load full case details
-            const caseDetails = await apiRequest(`/cases/${result.case_id}`);
+            // Load report
             const report = await apiRequest(`/cases/${result.case_id}/report`);
 
             // Show results
-            displayResults(caseDetails, report.report);
+            displayResults(result.case_id, caseData.title, result.status, report.report);
 
             // Refresh case list
             loadCases();
 
             // Reset form
             document.getElementById('case-form').reset();
-            renderToolSelection(); // Re-check default tools
         } else {
             throw new Error(result.message || 'Pipeline failed');
         }
@@ -218,54 +157,14 @@ async function createCase(caseData) {
         statusMessage.innerHTML = `<span class="error-message">Error: ${error.message}</span>`;
     } finally {
         submitBtn.disabled = false;
-        setTimeout(() => {
-            hideElement('pipeline-status');
-            toolProgress.innerHTML = '';
-        }, 2000);
+        hideElement('pipeline-status');
     }
 }
 
-function displayResults(caseData, report) {
-    // Basic info
-    document.getElementById('result-case-id').textContent = caseData.case_id;
-    document.getElementById('result-title').textContent = caseData.title;
-    document.getElementById('result-target').textContent = caseData.target;
-    document.getElementById('result-status').textContent = caseData.status;
-    document.getElementById('result-status').className = `status-badge ${caseData.status}`;
-
-    // Tools used
-    const toolResults = caseData.tool_results || [];
-    const toolsSuccessful = toolResults.filter(r => r.status === 'success').map(r => r.tool);
-    const toolsFailed = toolResults.filter(r => r.status === 'error').map(r => r.tool);
-
-    document.getElementById('result-tools').innerHTML = `
-        ${toolsSuccessful.length > 0 ? `<span class="success">${toolsSuccessful.join(', ')}</span>` : ''}
-        ${toolsFailed.length > 0 ? `<span class="error"> (Failed: ${toolsFailed.join(', ')})</span>` : ''}
-    `;
-
-    // Individual tool results
-    const toolResultsDiv = document.getElementById('individual-tool-results');
-    toolResultsDiv.innerHTML = toolResults.map(toolResult => `
-        <div class="tool-result-card ${toolResult.status}">
-            <div class="tool-result-header">
-                <h4>${toolResult.tool}</h4>
-                <span class="status-badge ${toolResult.status}">${toolResult.status}</span>
-            </div>
-            <div class="tool-result-body">
-                ${toolResult.status === 'success' ? `
-                    <p><strong>Results found:</strong> ${(toolResult.results || []).length}</p>
-                    <details>
-                        <summary>View raw results</summary>
-                        <pre><code>${JSON.stringify(toolResult.results, null, 2)}</code></pre>
-                    </details>
-                ` : `
-                    <p class="error-message"><strong>Error:</strong> ${toolResult.error}</p>
-                `}
-            </div>
-        </div>
-    `).join('');
-
-    // Unified report
+function displayResults(caseId, title, status, report) {
+    document.getElementById('result-case-id').textContent = caseId;
+    document.getElementById('result-title').textContent = title;
+    document.getElementById('result-status').textContent = status;
     document.getElementById('report-content').innerHTML = renderMarkdown(report);
 
     hideElement('new-case-section');
@@ -298,10 +197,7 @@ async function loadCases() {
                     <div class="case-item-status ${caseItem.status}">${caseItem.status}</div>
                 </div>
                 <div class="case-item-meta">
-                    Case ID: ${caseItem.case_id} | Target: ${caseItem.target} | Created: ${formatDate(caseItem.created_at)}
-                </div>
-                <div class="case-item-tools">
-                    Tools: ${(caseItem.tools_used || []).join(', ')}
+                    Case ID: ${caseItem.case_id} | Created: ${formatDate(caseItem.created_at)}
                 </div>
                 ${caseItem.description ? `<div class="case-item-description">${caseItem.description}</div>` : ''}
             </div>
@@ -326,7 +222,7 @@ async function loadCaseDetails(caseId) {
         const caseData = await apiRequest(`/cases/${caseId}`);
         const report = await apiRequest(`/cases/${caseId}/report`);
 
-        displayResults(caseData, report.report);
+        displayResults(caseId, caseData.title, caseData.status, report.report);
     } catch (error) {
         console.error('Error loading case details:', error);
         alert('Failed to load case details');
@@ -341,19 +237,10 @@ document.getElementById('case-form').addEventListener('submit', async (e) => {
     e.preventDefault();
 
     const formData = new FormData(e.target);
-    const selectedTools = getSelectedTools();
-
-    if (selectedTools.length === 0) {
-        alert('Please select at least one OSINT tool');
-        return;
-    }
-
     const caseData = {
         title: formData.get('title'),
         description: formData.get('description') || null,
-        target: formData.get('target'),
-        tools: selectedTools,
-        tool_options: {}
+        initial_query: formData.get('initial_query')
     };
 
     await createCase(caseData);
@@ -370,10 +257,7 @@ document.getElementById('new-case-btn').addEventListener('click', () => {
 // ============================================================================
 
 async function init() {
-    console.log('Loom OSINT Orchestration Platform v2.0 - Initializing...');
-
-    // Load available tools
-    await loadAvailableTools();
+    console.log('Loom OSINT Console - Initializing...');
 
     // Check health
     await checkHealth();

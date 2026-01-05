@@ -6,6 +6,10 @@ services:
     volumes:
       - ./app:/app
       - ./data:/data
+      # Mount SSH keys for Recon-ng access to pi-core
+      - ./keys:/app/keys:ro
+      # Mount Docker socket for TheHarvester and Sherlock
+      - /var/run/docker.sock:/var/run/docker.sock
     env_file:
       - ./.env
     environment:
@@ -17,6 +21,9 @@ services:
       sh -c "pip install --no-cache-dir -r requirements.txt
       && uvicorn main:app --host 0.0.0.0 --port 8787"
     restart: unless-stopped
+    # Allow DNS resolution of .lan domains
+    dns:
+      - 192.168.50.70
 
   loom-ui:
     image: nginx:alpine
