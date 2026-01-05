@@ -242,6 +242,77 @@ function getSelectedTools() {
 }
 
 // ============================================================================
+// System Insights Panel
+// ============================================================================
+
+function addLogEntry(message, type = 'info') {
+    const statusLog = document.getElementById('status-log');
+    const entry = document.createElement('p');
+    entry.className = `log-entry ${type}`;
+    entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+    statusLog.appendChild(entry);
+
+    // Auto-scroll to bottom
+    statusLog.scrollTop = statusLog.scrollHeight;
+
+    // Keep only last 100 entries
+    const entries = statusLog.querySelectorAll('.log-entry');
+    if (entries.length > 100) {
+        entries[0].remove();
+    }
+}
+
+function updateInsights(plan) {
+    // Show dependencies
+    const depsSection = document.getElementById('dependencies-section');
+    const depsList = document.getElementById('dependencies-list');
+
+    depsList.innerHTML = `
+        <li>Target type: ${plan.targetType}</li>
+        <li>Tools: ${plan.toolCount} selected</li>
+        <li>Est. duration: ${plan.estimate}</li>
+    `;
+    depsSection.style.display = 'block';
+
+    // Show external calls
+    const callsSection = document.getElementById('external-calls-section');
+    const callsList = document.getElementById('external-calls-list');
+
+    callsList.innerHTML = plan.externalCalls.map(call => {
+        const icon = call.type === 'local' ? '[LOCAL]' : '[REMOTE]';
+        return `<li>${icon} ${call.tool} → ${call.endpoint}</li>`;
+    }).join('');
+    callsSection.style.display = 'block';
+
+    // Show assumptions
+    const assumptionsSection = document.getElementById('assumptions-section');
+    const assumptionsList = document.getElementById('assumptions-list');
+
+    assumptionsList.innerHTML = plan.assumptions.length > 0
+        ? plan.assumptions.map(a => `<li>${a}</li>`).join('')
+        : '<li>None identified</li>';
+    assumptionsSection.style.display = 'block';
+
+    // Show current operation
+    const operationSection = document.getElementById('current-operation');
+    const operationDetails = document.getElementById('operation-details');
+    operationDetails.innerHTML = `
+        <p>Status: Planning</p>
+        <p>Target: <code>${plan.target}</code></p>
+    `;
+    operationSection.style.display = 'block';
+
+    addLogEntry('Execution plan generated');
+}
+
+function clearInsights() {
+    document.getElementById('dependencies-section').style.display = 'none';
+    document.getElementById('external-calls-section').style.display = 'none';
+    document.getElementById('assumptions-section').style.display = 'none';
+    document.getElementById('current-operation').style.display = 'none';
+}
+
+// ============================================================================
 // Execution Plan Generation
 // ============================================================================
 
@@ -341,6 +412,9 @@ function showExecutionPlan(plan) {
         </div>
     `;
 
+    // Update insights panel
+    updateInsights(plan);
+
     // Show plan, hide form
     hideElement('case-form');
     showElement('execution-plan');
@@ -349,6 +423,8 @@ function showExecutionPlan(plan) {
     document.getElementById('cancel-plan-btn').addEventListener('click', () => {
         hideElement('execution-plan');
         showElement('case-form');
+        clearInsights();
+        addLogEntry('Execution plan cancelled', 'warning');
         showToast('Execution cancelled', 'info');
     });
 
@@ -361,6 +437,83 @@ function showExecutionPlan(plan) {
 // Case Execution (After Confirmation)
 // ============================================================================
 
+// Poll case status until completion
+let statusPollInterval = null;
+
+async function pollCaseStatus(caseId) {
+    try {
+        const caseDetails = await apiRequest(`/cases/${caseId}`);
+        const status = caseDetails.status;
+
+        if (status === 'completed') {
+            // Stop polling
+            if (statusPollInterval) {
+                clearInterval(statusPollInterval);
+                statusPollInterval = null;
+            }
+
+            addLogEntry('Pipeline completed successfully', 'success');
+            document.getElementById('status-message').textContent = 'Pipeline completed. Loading results...';
+            showToast('Investigation complete', 'success');
+
+            const report = await apiRequest(`/cases/${caseId}/report`);
+            displayResults(caseDetails, report.report);
+            loadCases();
+
+            // Reset form
+            document.getElementById('case-form').reset();
+            renderToolSelection();
+            currentCaseId = null;
+
+        } else if (status === 'aborted') {
+            // Stop polling
+            if (statusPollInterval) {
+                clearInterval(statusPollInterval);
+                statusPollInterval = null;
+            }
+
+            addLogEntry('Pipeline aborted', 'warning');
+            document.getElementById('status-message').textContent = 'Pipeline aborted by user';
+            showToast('Execution aborted', 'warning');
+
+            // Show form again
+            setTimeout(() => {
+                hideElement('pipeline-status');
+                showElement('case-form');
+                clearInsights();
+            }, 3000);
+            currentCaseId = null;
+
+        } else if (status === 'failed' || status === 'error') {
+            // Stop polling
+            if (statusPollInterval) {
+                clearInterval(statusPollInterval);
+                statusPollInterval = null;
+            }
+
+            addLogEntry('Pipeline failed', 'error');
+            document.getElementById('status-message').innerHTML = `
+                <span class="error-message">Execution failed</span>
+                <p>Check case details for error information</p>
+            `;
+            showToast('Pipeline failed', 'error');
+
+            // Show form again
+            setTimeout(() => {
+                hideElement('pipeline-status');
+                showElement('case-form');
+                clearInsights();
+            }, 5000);
+            currentCaseId = null;
+        }
+        // Otherwise keep polling (status is still "processing")
+
+    } catch (error) {
+        console.error('Status poll error:', error);
+        addLogEntry(`Status check failed: ${error.message}`, 'error');
+    }
+}
+
 async function executeCase(caseData) {
     const planContainer = document.getElementById('execution-plan');
     const statusDiv = document.getElementById('pipeline-status');
@@ -368,6 +521,15 @@ async function executeCase(caseData) {
     const toolProgress = document.getElementById('tool-progress');
 
     try {
+        // Update insights - operation started
+        const operationDetails = document.getElementById('operation-details');
+        operationDetails.innerHTML = `
+            <p>Status: <span class="warning">EXECUTING</span></p>
+            <p>Target: <code>${caseData.target}</code></p>
+            <p>Tools: ${caseData.tools.length}</p>
+        `;
+        addLogEntry('Execution started', 'success');
+
         // Hide plan, show execution status
         hideElement('execution-plan');
         showElement('pipeline-status');
@@ -387,12 +549,6 @@ async function executeCase(caseData) {
             `).join('')}
         `;
 
-        // Add abort handler (note: backend doesn't support abort yet, but UI is ready)
-        document.getElementById('abort-btn').addEventListener('click', () => {
-            showToast('Abort requested (not yet implemented in backend)', 'warning');
-            // TODO: Implement abort API endpoint
-        });
-
         // Execute case
         const result = await apiRequest('/cases', {
             method: 'POST',
@@ -400,23 +556,41 @@ async function executeCase(caseData) {
         });
 
         currentCaseId = result.case_id;
+        addLogEntry(`Case created: ${currentCaseId}`, 'info');
 
-        if (result.status === 'completed') {
-            statusMessage.textContent = 'Pipeline completed. Loading results...';
-            showToast('Investigation complete', 'success');
+        // Add abort handler
+        document.getElementById('abort-btn').addEventListener('click', async () => {
+            if (!currentCaseId) {
+                showToast('No active case to abort', 'warning');
+                return;
+            }
 
-            const caseDetails = await apiRequest(`/cases/${result.case_id}`);
-            const report = await apiRequest(`/cases/${result.case_id}/report`);
+            addLogEntry('Abort requested', 'warning');
 
-            displayResults(caseDetails, report.report);
-            loadCases();
+            try {
+                const abortResult = await apiRequest(`/cases/${currentCaseId}/abort`, {
+                    method: 'POST'
+                });
+                addLogEntry('Abort signal sent', 'warning');
+                showToast('Aborting execution...', 'warning');
 
-            // Reset form
-            document.getElementById('case-form').reset();
-            renderToolSelection();
-        } else {
-            throw new Error(result.message || 'Pipeline failed');
-        }
+                // Disable abort button
+                const abortBtn = document.getElementById('abort-btn');
+                if (abortBtn) {
+                    abortBtn.disabled = true;
+                    abortBtn.textContent = 'Aborting...';
+                }
+            } catch (error) {
+                addLogEntry(`Abort failed: ${error.message}`, 'error');
+                showToast(`Abort failed: ${error.message}`, 'error');
+            }
+        });
+
+        // Start polling for status updates (every 2 seconds)
+        statusPollInterval = setInterval(() => pollCaseStatus(currentCaseId), 2000);
+
+        // Also poll immediately
+        await pollCaseStatus(currentCaseId);
 
     } catch (error) {
         console.error('Execution error:', error);
@@ -426,13 +600,14 @@ async function executeCase(caseData) {
             <p>What remains safe: Form inputs preserved, no data written</p>
         `;
         showToast(`Execution failed: ${error.message}`, 'error');
+        addLogEntry(`Execution error: ${error.message}`, 'error');
 
         // Show form again
         setTimeout(() => {
             hideElement('pipeline-status');
             showElement('case-form');
+            clearInsights();
         }, 5000);
-    } finally {
         currentCaseId = null;
     }
 }
@@ -531,7 +706,13 @@ function displayResults(caseData, report) {
     hideElement('pipeline-status');
     showElement('results-section');
 
-    document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+    // Update insights - completed
+    const operationDetails = document.getElementById('operation-details');
+    operationDetails.innerHTML = `
+        <p>Status: <span class="success">COMPLETED</span></p>
+        <p>Case ID: <code>${caseData.case_id}</code></p>
+    `;
+    addLogEntry(`Case ${caseData.case_id} loaded`, 'success');
 }
 
 // ============================================================================
@@ -704,20 +885,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('new-case-section').scrollIntoView({ behavior: 'smooth' });
     });
 
-    // Search input
-    const caseHistorySection = document.querySelector('#case-list').parentElement;
-    const searchContainer = document.createElement('div');
-    searchContainer.className = 'search-container';
-    searchContainer.innerHTML = `
-        <input
-            type="text"
-            id="case-search"
-            placeholder="Search cases by title, target, ID, or description..."
-            class="search-input"
-        />
-    `;
-    caseHistorySection.insertBefore(searchContainer, caseHistorySection.querySelector('h2').nextSibling);
-
+    // Search input (already in HTML, just add handler)
     document.getElementById('case-search').addEventListener('input', (e) => {
         filterCases(e.target.value);
     });
@@ -742,13 +910,21 @@ document.addEventListener('DOMContentLoaded', () => {
 async function init() {
     console.log('Loom OSINT Orchestration Platform - Initializing...');
 
+    addLogEntry('System initializing...', 'info');
+
     await loadAvailableTools();
+    addLogEntry('Tools loaded', 'success');
+
     await checkHealth();
+    addLogEntry('Health check complete', 'success');
+
     await loadCases();
+    addLogEntry('Cases loaded', 'success');
 
     setInterval(checkHealth, 30000);
 
     console.log('Loom initialized');
+    addLogEntry('System ready', 'success');
     showToast('Loom ready', 'success');
 }
 

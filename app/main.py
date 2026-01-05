@@ -123,6 +123,9 @@ odoo_read = None
 odoo_write = None
 odoo_proposals = {}  # Store pending proposals by ID
 
+# Running case tracking for abort functionality
+running_cases = {}  # Maps case_id -> asyncio.Task
+
 # ============================================================================
 # Prometheus Metrics
 # ============================================================================
@@ -712,65 +715,79 @@ async def run_osint_pipeline(case_id: str, case_create: CaseCreate) -> Dict[str,
     3. Synthesize unified report with Ollama
     4. Save results to filesystem, CouchDB, and PostgreSQL
     5. Return case metadata
+
+    Supports cancellation via asyncio.CancelledError
     """
 
-    # 1. Create case structure
-    create_case_directory(case_id)
+    try:
+        # 1. Create case structure
+        create_case_directory(case_id)
 
-    case_metadata = {
-        "case_id": case_id,
-        "title": case_create.title,
-        "description": case_create.description,
-        "target": case_create.target,
-        "tools_requested": case_create.tools,
-        "created_at": datetime.utcnow().isoformat(),
-        "status": "processing"
-    }
+        case_metadata = {
+            "case_id": case_id,
+            "title": case_create.title,
+            "description": case_create.description,
+            "target": case_create.target,
+            "tools_requested": case_create.tools,
+            "created_at": datetime.utcnow().isoformat(),
+            "status": "processing"
+        }
 
-    await save_case_metadata(case_id, case_metadata)
-    await log_to_postgres(case_id, "loom", "started", "case_created", case_metadata)
+        await save_case_metadata(case_id, case_metadata)
+        await log_to_postgres(case_id, "loom", "started", "case_created", case_metadata)
 
-    # 2. Execute tools
-    await log_to_postgres(case_id, "loom", "running", "executing_tools", {"tools": case_create.tools})
+        # 2. Execute tools
+        await log_to_postgres(case_id, "loom", "running", "executing_tools", {"tools": case_create.tools})
 
-    tool_results = await tool_registry.execute_tools(
-        case_create.target,
-        case_create.tools,
-        case_create.tool_options
-    )
-
-    # Save individual tool results
-    for result in tool_results:
-        tool_name = result.get("tool", "unknown")
-        await save_tool_results(case_id, tool_name, result)
-        await log_to_postgres(
-            case_id,
-            tool_name,
-            result.get("status", "unknown"),
-            "tool_completed",
-            {"results_count": len(result.get("results", []))}
+        tool_results = await tool_registry.execute_tools(
+            case_create.target,
+            case_create.tools,
+            case_create.tool_options
         )
 
-    case_metadata["tool_results"] = tool_results
-    case_metadata["status"] = "synthesizing"
-    await save_case_metadata(case_id, case_metadata)
+        # Save individual tool results
+        for result in tool_results:
+            tool_name = result.get("tool", "unknown")
+            await save_tool_results(case_id, tool_name, result)
+            await log_to_postgres(
+                case_id,
+                tool_name,
+                result.get("status", "unknown"),
+                "tool_completed",
+                {"results_count": len(result.get("results", []))}
+            )
 
-    # 3. Synthesize unified report
-    await log_to_postgres(case_id, "loom", "running", "synthesizing_report")
+        case_metadata["tool_results"] = tool_results
+        case_metadata["status"] = "synthesizing"
+        await save_case_metadata(case_id, case_metadata)
 
-    report = await synthesize_unified_report(case_metadata, tool_results)
-    await save_report(case_id, report)
+        # 3. Synthesize unified report
+        await log_to_postgres(case_id, "loom", "running", "synthesizing_report")
 
-    # 4. Mark complete
-    case_metadata["status"] = "completed"
-    case_metadata["completed_at"] = datetime.utcnow().isoformat()
-    await save_case_metadata(case_id, case_metadata)
+        report = await synthesize_unified_report(case_metadata, tool_results)
+        await save_report(case_id, report)
 
-    # 5. Save to CouchDB
-    await save_to_couchdb(case_id, case_metadata)
-    await log_to_postgres(case_id, "loom", "completed", "pipeline_finished")
+        # 4. Mark complete
+        case_metadata["status"] = "completed"
+        case_metadata["completed_at"] = datetime.utcnow().isoformat()
+        await save_case_metadata(case_id, case_metadata)
 
-    return case_metadata
+        # 5. Save to CouchDB
+        await save_to_couchdb(case_id, case_metadata)
+        await log_to_postgres(case_id, "loom", "completed", "pipeline_finished")
+
+        return case_metadata
+
+    except asyncio.CancelledError:
+        # Handle graceful cancellation/abort
+        logger.info(f"⚠️  Case {case_id} aborted by user")
+
+        case_metadata["status"] = "aborted"
+        case_metadata["aborted_at"] = datetime.utcnow().isoformat()
+        await save_case_metadata(case_id, case_metadata)
+        await log_to_postgres(case_id, "loom", "aborted", "pipeline_aborted", {"reason": "user_request"})
+
+        raise  # Re-raise to signal abortion
 
 # ============================================================================
 # API Endpoints
@@ -866,18 +883,8 @@ async def list_tools(request: Request):
         "tools": tool_registry.get_all_tools_status()
     }
 
-@app.post("/cases", response_model=PipelineStatus, dependencies=[Depends(verify_api_key)])
-@limiter.limit("10/minute")  # Limit case creation to prevent abuse
-async def create_case(request: Request, case_create: CaseCreate):
-    """Create a new case and run the OSINT orchestration pipeline"""
-
-    case_id = str(uuid.uuid4())[:8]
-    logger.info(f"🔍 Creating new case {case_id}: {case_create.title}")
-
-    # Track metrics
-    cases_created_total.inc()
-    active_cases.inc()
-
+async def _execute_pipeline_background(case_id: str, case_create: CaseCreate):
+    """Background task to execute pipeline with cleanup"""
     try:
         await run_osint_pipeline(case_id, case_create)
 
@@ -894,34 +901,50 @@ async def create_case(request: Request, case_create: CaseCreate):
                 tools_executed_total.labels(tool_name=result.get("tool"), status="error").inc()
 
         logger.info(f"✅ Case {case_id} completed: {len(tools_completed)} succeeded, {len(tools_failed)} failed")
-
         cases_completed_total.inc()
-        active_cases.dec()
 
-        return PipelineStatus(
-            case_id=case_id,
-            status="completed",
-            stage="report_generated",
-            tools_completed=tools_completed,
-            tools_failed=tools_failed,
-            message=f"Pipeline completed: {len(tools_completed)} tools succeeded, {len(tools_failed)} failed",
-            report_ready=True
-        )
+    except asyncio.CancelledError:
+        logger.info(f"⚠️  Case {case_id} aborted")
+        # Metadata already updated in run_osint_pipeline
 
     except Exception as e:
         logger.error(f"❌ Case {case_id} failed: {e}", exc_info=True)
         await log_to_postgres(case_id, "loom", "error", "pipeline_failed", {"error": str(e)})
-
         cases_failed_total.inc()
-        active_cases.dec()
 
-        return PipelineStatus(
-            case_id=case_id,
-            status="error",
-            stage="failed",
-            message=str(e),
-            report_ready=False
-        )
+    finally:
+        # Clean up task tracking
+        active_cases.dec()
+        if case_id in running_cases:
+            del running_cases[case_id]
+
+
+@app.post("/cases", response_model=PipelineStatus, dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")  # Limit case creation to prevent abuse
+async def create_case(request: Request, case_create: CaseCreate):
+    """Create a new case and run the OSINT orchestration pipeline in background"""
+
+    case_id = str(uuid.uuid4())[:8]
+    logger.info(f"🔍 Creating new case {case_id}: {case_create.title}")
+
+    # Track metrics
+    cases_created_total.inc()
+    active_cases.inc()
+
+    # Create and track background task
+    task = asyncio.create_task(_execute_pipeline_background(case_id, case_create))
+    running_cases[case_id] = task
+
+    # Return immediate response - client should poll for status
+    return PipelineStatus(
+        case_id=case_id,
+        status="processing",
+        stage="pipeline_started",
+        tools_completed=[],
+        tools_failed=[],
+        message="Pipeline execution started. Poll /cases/{case_id} for status.",
+        report_ready=False
+    )
 
 @app.get("/cases", dependencies=[Depends(verify_api_key)])
 @limiter.limit("60/minute")
@@ -955,6 +978,36 @@ async def get_case(request: Request, case_id: str):
         raise HTTPException(status_code=404, detail="Case not found")
 
     return metadata
+
+@app.post("/cases/{case_id}/abort", dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+async def abort_case(request: Request, case_id: str):
+    """Abort a running case execution"""
+
+    # Check if case is currently running
+    if case_id not in running_cases:
+        # Check if case exists but isn't running
+        metadata = await load_case_metadata(case_id)
+        if metadata:
+            status = metadata.get("status", "unknown")
+            if status in ["completed", "aborted", "failed"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Case {case_id} is not running (status: {status})"
+                )
+        raise HTTPException(status_code=404, detail=f"No running case found with ID {case_id}")
+
+    # Cancel the running task
+    task = running_cases[case_id]
+    task.cancel()
+
+    logger.info(f"🛑 Abort requested for case {case_id}")
+
+    return {
+        "case_id": case_id,
+        "status": "aborting",
+        "message": "Case execution is being aborted. Check case status for updates."
+    }
 
 @app.get("/cases/{case_id}/report", dependencies=[Depends(verify_api_key)])
 @limiter.limit("60/minute")
