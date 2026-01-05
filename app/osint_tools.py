@@ -91,11 +91,16 @@ class ReconNGTool(OSINTTool):
             command = " && ".join(commands)
 
             # Connect via SSH and execute
+            # Note: For production, use proper known_hosts file for SSH host key verification
+            # Set ENVIRONMENT=production and configure known_hosts file
+            environment = os.getenv("ENVIRONMENT", "development")
+            known_hosts_config = None if environment == "development" else "/app/keys/known_hosts"
+
             async with asyncssh.connect(
                 self.ssh_host,
                 username=self.ssh_user,
                 client_keys=[self.ssh_key_path] if os.path.exists(self.ssh_key_path) else None,
-                known_hosts=None  # Note: Disables host key verification for lab environment
+                known_hosts=known_hosts_config
             ) as conn:
                 result = await conn.run(command, check=False)
 
@@ -505,7 +510,11 @@ class SearXNGTool(OSINTTool):
         try:
             num_results = options.get("num_results", 15) if options else 15
 
-            async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+            # SSL verification based on environment
+            environment = os.getenv("ENVIRONMENT", "development")
+            ssl_verify = environment == "production"
+
+            async with httpx.AsyncClient(timeout=30.0, verify=ssl_verify) as client:
                 params = {
                     "q": target,
                     "format": "json",
