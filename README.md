@@ -1,46 +1,99 @@
-# Loom (MVP) — local-first OSINT console (GUI + API) powered by Ollama
+# Loom v2.0 — OSINT Orchestration Platform
 
-Loom is a lightweight, self-hosted **web GUI** + **API** that replicates the “n8n workflow effect”:
+Loom is a **unified web interface** for orchestrating local OSINT tools on your pi-net. Replace complex n8n workflows with a single, easy-to-use dashboard.
 
-**Intake → Plan → Tool Runs → Synthesis → Report Bundle**
+## Unified Tool Orchestration
 
-- **Brain:** Ollama (remote, e.g. `pi-forge`)
-- **Search tool:** SearXNG (`searxng.lan`) via JSON API
-- **Storage:** Writes case folders to a mounted volume (`./data` → `/data`)
-- **UI:** simple web dashboard (static HTML) served by Nginx
+**Intake → Multi-Tool Execution → AI Synthesis → Unified Report**
 
-## Quick start
+### Integrated Tools
 
-### 1) Prereqs
-- Docker + docker compose on a Pi (64-bit strongly preferred)
-- Reachability to:
-  - Ollama: `http://pi-forge.nexus.lan:11434` (or your endpoint)
-  - SearXNG: `https://searxng.lan`
+- ✅ **SearXNG** - Private web search
+- ✅ **Recon-ng** - Reconnaissance framework (subdomains, hosts)
+- ✅ **TheHarvester** - Email & subdomain harvesting
+- ✅ **Sherlock** - Username search across social media
+- ✅ **SpiderFoot** - Automated OSINT collection
+- ✅ **IntelOwl** - Threat intelligence analysis
 
-### 2) Configure
-Copy `.env.example` to `.env` and edit:
+### Core Features
+
+- **🎯 Target-Based:** Single target, multiple tools
+- **🤖 AI-Powered:** Ollama synthesizes results from all tools
+- **📊 Rich UI:** Tool selection, progress tracking, per-tool results
+- **💾 Persistent:** CouchDB storage + PostgreSQL logging
+- **🔗 API-First:** Full REST API for automation
+
+## Quick Start
+
+**Full setup guide:** See [SETUP-V2.md](SETUP-V2.md) for complete deployment instructions.
+
+### 1) Prerequisites
+
+- Docker + Docker Compose
+- SSH access to pi-core (for Recon-ng)
+- Access to:
+  - Ollama (Pi-Forge, AI-Srv, or pi-core)
+  - SearXNG (pi-core:8888)
+  - Optional: SpiderFoot, IntelOwl
+
+### 2) Setup SSH Keys
+
+```bash
+cd /path/to/loom
+mkdir -p keys
+ssh-keygen -t ed25519 -f keys/id_ed25519 -N ""
+ssh-copy-id -i keys/id_ed25519.pub admin@192.168.50.168
+```
+
+### 3) Pull Docker Images
+
+```bash
+docker pull theharvester:latest
+docker pull sherlock/sherlock:latest
+```
+
+### 4) Configure & Deploy
 
 ```bash
 cp .env.example .env
-```
-
-### 3) Run
-```bash
+# Edit .env if needed (defaults work for pi-net)
 docker compose up -d
 ```
 
-- UI: `http://<pi-ip>:8788`
-- API: `http://<pi-ip>:8787/docs`
+### 5) Access
 
-## What “Run pipeline” does
-1. Creates (or uses) a case
-2. Asks Ollama to generate a **query plan** (structured JSON)
-3. Executes SearXNG searches for those queries
-4. Asks Ollama to synthesize results into a **structured JSON report**
-5. Writes:
-   - `/data/cases/<case_id>/case.json`
-   - `/data/cases/<case_id>/raw/searx_bundle_*.json`
-   - `/data/cases/<case_id>/report.md`
+- **UI:** `http://<pi-ip>:8788`
+- **API:** `http://<pi-ip>:8787/docs`
+- **With Caddy:** `https://loom.lan`
+
+## How It Works
+
+### 1. Create Investigation
+- Enter target (domain, IP, username, email)
+- Select tools to run (SearXNG, Recon-ng, TheHarvester, etc.)
+- Optionally configure per-tool options
+
+### 2. Parallel Execution
+- All selected tools run simultaneously
+- Real-time progress tracking in UI
+- Each tool returns structured results
+
+### 3. AI Synthesis
+- Ollama analyzes results from ALL tools
+- Cross-references findings
+- Generates unified intelligence report
+
+### 4. Storage & Export
+Saves to filesystem, CouchDB, and PostgreSQL:
+```
+/data/cases/<case_id>/
+  ├── case.json          # Case metadata
+  ├── report.md          # Unified AI-generated report
+  └── tools/
+      ├── searxng.json   # SearXNG results
+      ├── recon-ng.json  # Recon-ng results
+      └── ...            # Other tool results
+```
 
 ## Security
 - This is meant for LAN/VPN use.
@@ -72,8 +125,78 @@ loom-mvp/
     cases/   (created at runtime)
 ```
 
-## Notes / roadmap
-- Add tool registry + dynamic `tool_plan[]` execution (Sherlock/SpiderFoot/etc.)
-- Add case list UI + re-runs + diffing
-- Add auth (basic auth behind Caddy) or WireGuard-only access
-- Add connectors to your local stores later (NAS notes, PDFs, etc.)
+## Documentation
+
+- **[README.md](README.md)** - This file (overview)
+- **[SETUP-V2.md](SETUP-V2.md)** - Complete v2.0 setup guide
+- **[PI-NET-SETUP.md](PI-NET-SETUP.md)** - Pi-net specific deployment
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** - General deployment guide
+- **[.env.example](.env.example)** - Configuration template
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│          Loom Web UI (Port 8788)                │
+│     Tool Selection │ Progress │ Results         │
+└──────────────────┬──────────────────────────────┘
+                   │
+┌──────────────────▼──────────────────────────────┐
+│      Loom API (FastAPI - Port 8787)             │
+│   Orchestration │ AI Synthesis │ Storage        │
+└──┬────┬────┬────┬────┬────┬────────┬───────┬───┘
+   │    │    │    │    │    │        │       │
+   ▼    ▼    ▼    ▼    ▼    ▼        ▼       ▼
+SearXNG │ Harvest│Sherlock│Spider  Intel  Couch Postgres
+       Recon-ng  TheH.          Foot   Owl   DB   (logs)
+```
+
+## API Examples
+
+### Create Investigation
+
+```bash
+curl -X POST http://localhost:8787/cases \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Company OSINT",
+    "target": "example.com",
+    "tools": ["searxng", "recon-ng", "theharvester"]
+  }'
+```
+
+### List Cases
+
+```bash
+curl http://localhost:8787/cases | jq
+```
+
+### Get Tool Results
+
+```bash
+curl http://localhost:8787/cases/<case_id>/tools/recon-ng | jq
+```
+
+## What's New in v2.0
+
+### ✅ Implemented
+- Multi-tool orchestration (6 tools integrated)
+- Tool selection UI with checkboxes
+- Parallel tool execution
+- Per-tool result display
+- CouchDB storage integration
+- PostgreSQL activity logging
+- Unified AI synthesis across all tools
+- SSH integration for Recon-ng
+- Docker integration for TheHarvester/Sherlock
+- API integration for SpiderFoot/IntelOwl
+
+### 🚀 Future Enhancements
+- Real-time WebSocket progress updates
+- Case comparison and diff ing
+- Custom tool plugins
+- Scheduled/recurring investigations
+- Alert system for new findings
+- Export to PDF/JSON/CSV
+- Integration with Maltego
+- Qdrant vector storage for RAG

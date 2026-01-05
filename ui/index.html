@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loom - OSINT Orchestration Platform</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🕸️ Loom</h1>
+            <p class="tagline">OSINT Orchestration Platform</p>
+            <p class="version">v2.0 - Unified Tool Interface</p>
+            <div class="health-status" id="health-status">
+                <span class="status-dot" id="status-dot"></span>
+                <span id="status-text">Checking services...</span>
+            </div>
+        </header>
+
+        <main>
+            <!-- New Case Form -->
+            <section class="card" id="new-case-section">
+                <h2>New Investigation</h2>
+                <form id="case-form">
+                    <div class="form-group">
+                        <label for="case-title">Case Title *</label>
+                        <input
+                            type="text"
+                            id="case-title"
+                            name="title"
+                            placeholder="e.g., Background check on example.com"
+                            required
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="case-description">Description</label>
+                        <textarea
+                            id="case-description"
+                            name="description"
+                            rows="2"
+                            placeholder="Optional: Provide context for the investigation"
+                        ></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="target">Target *</label>
+                        <input
+                            type="text"
+                            id="target"
+                            name="target"
+                            placeholder="Domain, IP, username, email, etc."
+                            required
+                        >
+                        <small>Examples: example.com, 192.168.1.1, @username, email@domain.com</small>
+                    </div>
+
+                    <!-- Tool Selection -->
+                    <div class="form-group">
+                        <label>Select OSINT Tools</label>
+                        <div class="tool-grid" id="tool-grid">
+                            <!-- Tools will be dynamically loaded -->
+                            <div class="tool-option loading">Loading tools...</div>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" id="submit-btn">
+                        Run OSINT Pipeline
+                    </button>
+                </form>
+
+                <div class="pipeline-status" id="pipeline-status" style="display: none;">
+                    <div class="spinner"></div>
+                    <p id="status-message">Initializing pipeline...</p>
+                    <div class="tool-progress" id="tool-progress"></div>
+                </div>
+            </section>
+
+            <!-- Case Results -->
+            <section class="card" id="results-section" style="display: none;">
+                <div class="results-header">
+                    <h2>Investigation Results</h2>
+                    <button class="btn btn-secondary" id="new-case-btn">New Investigation</button>
+                </div>
+
+                <div class="case-info">
+                    <p><strong>Case ID:</strong> <span id="result-case-id"></span></p>
+                    <p><strong>Title:</strong> <span id="result-title"></span></p>
+                    <p><strong>Target:</strong> <span id="result-target"></span></p>
+                    <p><strong>Status:</strong> <span id="result-status" class="status-badge"></span></p>
+                    <p><strong>Tools:</strong> <span id="result-tools"></span></p>
+                </div>
+
+                <!-- Tool-by-Tool Results -->
+                <div class="tool-results">
+                    <h3>Tool Results</h3>
+                    <div id="individual-tool-results"></div>
+                </div>
+
+                <!-- Unified Report -->
+                <div class="report-container">
+                    <h3>Unified Intelligence Report</h3>
+                    <div id="report-content" class="report-content"></div>
+                </div>
+            </section>
+
+            <!-- Case History -->
+            <section class="card">
+                <h2>Case History</h2>
+                <div id="case-list">
+                    <p class="loading">Loading cases...</p>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Loom OSINT Orchestration Platform v2.0 | Powered by Ollama + Local OSINT Tools</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
