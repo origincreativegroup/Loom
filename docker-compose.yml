@@ -1,0 +1,28 @@
+services:
+  loom-api:
+    image: python:3.11-slim
+    container_name: loom-api
+    working_dir: /app
+    volumes:
+      - ./app:/app
+      - ./data:/data
+    env_file:
+      - ./.env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8787:8787"
+    command: >
+      sh -c "pip install --no-cache-dir -r requirements.txt
+      && uvicorn main:app --host 0.0.0.0 --port 8787"
+    restart: unless-stopped
+
+  loom-ui:
+    image: nginx:alpine
+    container_name: loom-ui
+    volumes:
+      - ./ui:/usr/share/nginx/html:ro
+    ports:
+      - "8788:80"
+    restart: unless-stopped
