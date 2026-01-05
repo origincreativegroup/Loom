@@ -7,7 +7,7 @@ This guide is specifically tailored for your pi-net infrastructure.
 Your network has these key hosts:
 - **pi-net (Gateway)**: 192.168.50.70 - Caddy, Pi-hole, WireGuard
 - **NexusNAS**: 192.168.50.199 - Docker services, storage
-- **Pi-5 (pi-core)**: 192.168.50.168 - Ollama (port 11435)
+- **Pi-5 (pi-core)**: 192.168.50.168 - Ollama (11435), SearXNG (8888), Stirling-PDF (8095)
 - **Pi-Forge**: 192.168.50.157 - Ollama (port 11434)
 - **AI-Srv**: 192.168.50.247 - Ollama (port 11434), ComfyUI
 
@@ -48,9 +48,8 @@ OLLAMA_URL=http://192.168.50.157:11434
 # Model (check what's installed: ssh to Pi-Forge and run 'ollama list')
 OLLAMA_MODEL=llama3.2:latest
 
-# SearXNG - you'll need to deploy this first (see below)
-# For now, use a public instance:
-SEARXNG_URL=https://search.bus-hit.me
+# SearXNG - Already running on Pi-Core!
+SEARXNG_URL=http://192.168.50.168:8888
 
 # Optional API key for security
 OSINT_API_KEY=
@@ -129,52 +128,40 @@ Now access via:
 - **UI**: https://loom.lan
 - **API**: https://loom-api.lan/docs
 
-## Step 7: Deploy SearXNG (Optional but Recommended)
+## Step 7: Verify SearXNG Access
 
-For better OSINT results, deploy SearXNG on NexusNAS:
+Your pi-net already has SearXNG running on Pi-Core (192.168.50.168:8888)!
+
+Test it from NexusNAS:
 
 ```bash
-# On NexusNAS
-mkdir -p ~/searxng
-cd ~/searxng
-
-# Create docker-compose.yml
-cat > docker-compose.yml << 'EOF'
-services:
-  searxng:
-    image: searxng/searxng:latest
-    container_name: searxng
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./searxng:/etc/searxng
-    environment:
-      - SEARXNG_BASE_URL=https://search.lan/
-    restart: unless-stopped
-EOF
-
-# Start SearXNG
-docker compose up -d
+curl http://192.168.50.168:8888/search?q=test&format=json
 ```
 
-Add to Caddy on pi-net:
+**Optional**: Add SearXNG to Caddy for HTTPS access:
 
-```caddy
+```bash
+# On pi-net gateway (192.168.50.70)
+sudo nano /etc/caddy/Caddyfile
+
+# Add:
 search.lan {
-    reverse_proxy 192.168.50.199:8080
+    reverse_proxy 192.168.50.168:8888
 }
+
+# Then add DNS:
+sudo nano /etc/dnsmasq.d/02-lan-hosts.conf
+# Add: address=/search.lan/192.168.50.70
+
+# Reload:
+sudo systemctl reload caddy
+sudo systemctl restart dnsmasq
 ```
 
-Update Loom's `.env`:
+If you add the Caddy reverse proxy, update Loom's `.env`:
 
 ```bash
 SEARXNG_URL=https://search.lan
-```
-
-Restart Loom:
-
-```bash
-cd ~/loom
 docker compose restart
 ```
 
