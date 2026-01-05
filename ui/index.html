@@ -9,143 +9,186 @@
 <body>
     <div class="container">
         <header>
-            <h1>🕸️ Loom</h1>
+            <h1>Loom</h1>
             <p class="tagline">OSINT Orchestration Platform</p>
-            <p class="version">v2.0 - Unified Tool Interface</p>
+            <p class="version">v3.0 - Philosophy-Aligned</p>
             <div class="health-status" id="health-status">
                 <span class="status-dot" id="status-dot"></span>
                 <span id="status-text">Checking services...</span>
             </div>
         </header>
 
-        <main>
-            <!-- New Case Form -->
-            <section class="card" id="new-case-section">
-                <h2>New Investigation</h2>
-                <form id="case-form">
-                    <div class="form-group">
-                        <label for="case-title">Case Title *</label>
+        <main class="three-column-layout">
+            <!-- LEFT COLUMN: Context & Navigation -->
+            <aside class="context-panel">
+                <section class="panel-section">
+                    <h2>Case History</h2>
+                    <div class="search-container">
                         <input
                             type="text"
-                            id="case-title"
-                            name="title"
-                            placeholder="e.g., Background check on example.com"
-                            required
-                        >
+                            id="case-search"
+                            placeholder="Search cases..."
+                            class="search-input"
+                        />
                     </div>
-
-                    <div class="form-group">
-                        <label for="case-description">Description</label>
-                        <textarea
-                            id="case-description"
-                            name="description"
-                            rows="2"
-                            placeholder="Optional: Provide context for the investigation"
-                        ></textarea>
+                    <div id="case-list">
+                        <p class="loading">Loading cases...</p>
                     </div>
+                </section>
 
-                    <div class="form-group">
-                        <label for="target">Target *</label>
-                        <input
-                            type="text"
-                            id="target"
-                            name="target"
-                            placeholder="Domain, IP, username, email, etc."
-                            required
-                        >
-                        <small>Examples: example.com, 192.168.1.1, @username, email@domain.com</small>
-                    </div>
-
-                    <!-- Tool Selection -->
-                    <div class="form-group">
-                        <label>Select OSINT Tools</label>
-                        <div class="tool-grid" id="tool-grid">
-                            <!-- Tools will be dynamically loaded -->
-                            <div class="tool-option loading">Loading tools...</div>
+                <section class="panel-section">
+                    <h2>Query System</h2>
+                    <div class="query-container-compact">
+                        <div class="query-messages-compact" id="query-messages">
+                            <div class="query-message system">
+                                <strong>System:</strong> Available queries:
+                                <ul>
+                                    <li>Tool selection strategy</li>
+                                    <li>Investigation methodology</li>
+                                    <li>Result correlation patterns</li>
+                                </ul>
+                            </div>
+                        </div>
+                        <div class="query-input-container-compact">
+                            <textarea
+                                id="query-input"
+                                placeholder="Enter query..."
+                                rows="2"
+                            ></textarea>
+                            <button class="btn btn-primary btn-sm" id="send-query-btn">Query</button>
                         </div>
                     </div>
+                </section>
+            </aside>
 
-                    <button type="submit" class="btn btn-primary" id="submit-btn">
-                        Run OSINT Pipeline
-                    </button>
-                </form>
+            <!-- CENTER COLUMN: Intent & Active Process -->
+            <section class="intent-panel">
+                <!-- New Case Form -->
+                <div class="panel-section" id="new-case-section">
+                    <h2>New Investigation</h2>
+                    <form id="case-form">
+                        <div class="form-group">
+                            <label for="case-title">Case Title *</label>
+                            <input
+                                type="text"
+                                id="case-title"
+                                name="title"
+                                placeholder="e.g., Background check on example.com"
+                                required
+                            >
+                        </div>
 
-                <div class="pipeline-status" id="pipeline-status" style="display: none;">
+                        <div class="form-group">
+                            <label for="case-description">Description</label>
+                            <textarea
+                                id="case-description"
+                                name="description"
+                                rows="2"
+                                placeholder="Optional: Provide context for the investigation"
+                            ></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="target">Target *</label>
+                            <input
+                                type="text"
+                                id="target"
+                                name="target"
+                                placeholder="Domain, IP, username, email, etc."
+                                required
+                            >
+                            <small>Examples: example.com, 192.168.1.1, @username, email@domain.com</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Select OSINT Tools</label>
+                            <div class="tool-grid" id="tool-grid">
+                                <div class="tool-option loading">Loading tools...</div>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary" id="submit-btn">
+                            Analyze Plan
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Execution Plan Review -->
+                <div class="panel-section" id="execution-plan" style="display: none;">
+                    <!-- Plan content generated by JavaScript -->
+                </div>
+
+                <!-- Pipeline Status -->
+                <div class="panel-section" id="pipeline-status" style="display: none;">
                     <div class="spinner"></div>
                     <p id="status-message">Initializing pipeline...</p>
                     <div class="tool-progress" id="tool-progress"></div>
                 </div>
-            </section>
 
-            <!-- Case Results -->
-            <section class="card" id="results-section" style="display: none;">
-                <div class="results-header">
-                    <h2>Investigation Results</h2>
-                    <button class="btn btn-secondary" id="new-case-btn">New Investigation</button>
-                </div>
+                <!-- Case Results -->
+                <div class="panel-section" id="results-section" style="display: none;">
+                    <div class="results-header">
+                        <h2>Investigation Results</h2>
+                        <button class="btn btn-secondary" id="new-case-btn">New Investigation</button>
+                    </div>
 
-                <div class="case-info">
-                    <p><strong>Case ID:</strong> <span id="result-case-id"></span></p>
-                    <p><strong>Title:</strong> <span id="result-title"></span></p>
-                    <p><strong>Target:</strong> <span id="result-target"></span></p>
-                    <p><strong>Status:</strong> <span id="result-status" class="status-badge"></span></p>
-                    <p><strong>Tools:</strong> <span id="result-tools"></span></p>
-                </div>
+                    <div class="case-info">
+                        <p><strong>Case ID:</strong> <code id="result-case-id"></code></p>
+                        <p><strong>Title:</strong> <span id="result-title"></span></p>
+                        <p><strong>Target:</strong> <code id="result-target"></code></p>
+                        <p><strong>Status:</strong> <span id="result-status" class="status-badge"></span></p>
+                        <p><strong>Tools:</strong> <span id="result-tools"></span></p>
+                    </div>
 
-                <!-- Tool-by-Tool Results -->
-                <div class="tool-results">
-                    <h3>Tool Results</h3>
-                    <div id="individual-tool-results"></div>
-                </div>
+                    <div class="tool-results">
+                        <h3>Tool Results</h3>
+                        <div id="individual-tool-results"></div>
+                    </div>
 
-                <!-- Unified Report -->
-                <div class="report-container">
-                    <h3>Unified Intelligence Report</h3>
-                    <div id="report-content" class="report-content"></div>
+                    <div class="report-container">
+                        <h3>Unified Intelligence Report</h3>
+                        <div id="report-content" class="report-content"></div>
+                    </div>
                 </div>
             </section>
 
-            <!-- AI Research Assistant -->
-            <section class="card" id="ai-assistant-section">
-                <h2>🤖 AI Research Assistant</h2>
-                <p class="tagline">Get help with target research, data orchestration, and investigation planning</p>
+            <!-- RIGHT COLUMN: System Insights -->
+            <aside class="insights-panel">
+                <section class="panel-section">
+                    <h2>System Insights</h2>
 
-                <div class="chat-container" id="chat-container">
-                    <div class="chat-messages" id="chat-messages">
-                        <div class="chat-message assistant">
-                            <strong>Assistant:</strong> Hello! I'm your OSINT research assistant. I can help you:
-                            <ul>
-                                <li>Plan investigation strategies for your targets</li>
-                                <li>Suggest which tools to use based on your target type</li>
-                                <li>Help analyze and correlate findings</li>
-                                <li>Provide context about OSINT techniques</li>
-                            </ul>
-                            How can I assist with your investigation today?
+                    <div class="insight-section" id="current-operation" style="display: none;">
+                        <h3>Current Operation</h3>
+                        <div id="operation-details"></div>
+                    </div>
+
+                    <div class="insight-section" id="dependencies-section" style="display: none;">
+                        <h3>Dependencies</h3>
+                        <ul id="dependencies-list" class="insight-list"></ul>
+                    </div>
+
+                    <div class="insight-section" id="external-calls-section" style="display: none;">
+                        <h3>External Calls</h3>
+                        <ul id="external-calls-list" class="insight-list"></ul>
+                    </div>
+
+                    <div class="insight-section" id="assumptions-section" style="display: none;">
+                        <h3>Assumptions</h3>
+                        <ul id="assumptions-list" class="insight-list"></ul>
+                    </div>
+
+                    <div class="insight-section" id="status-log-section">
+                        <h3>Status Log</h3>
+                        <div id="status-log" class="status-log">
+                            <p class="log-entry">System initialized</p>
                         </div>
                     </div>
-
-                    <div class="chat-input-container">
-                        <textarea
-                            id="chat-input"
-                            placeholder="Ask me anything about OSINT, targets, or research strategies..."
-                            rows="2"
-                        ></textarea>
-                        <button class="btn btn-primary" id="send-chat-btn">Send</button>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Case History -->
-            <section class="card">
-                <h2>Case History</h2>
-                <div id="case-list">
-                    <p class="loading">Loading cases...</p>
-                </div>
-            </section>
+                </section>
+            </aside>
         </main>
 
         <footer>
-            <p>Loom OSINT Orchestration Platform v2.0 | Powered by Ollama + Local OSINT Tools</p>
+            <p>Loom OSINT Orchestration Platform v3.0</p>
         </footer>
     </div>
 

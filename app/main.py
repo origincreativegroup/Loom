@@ -33,6 +33,17 @@ import aiofiles
 # Import OSINT tool integrations
 from osint_tools import ToolRegistry
 
+# Import Odoo integration
+from odoo_client import (
+    OdooClient,
+    OdooReadOperations,
+    OdooWriteOperations,
+    OdooProposal,
+    OdooConnectionError,
+    OdooAuthenticationError,
+    OdooOperationError
+)
+
 # ============================================================================
 # Logging Configuration
 # ============================================================================
@@ -83,6 +94,15 @@ POSTGRES_DB = os.getenv("POSTGRES_DB", "automation")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
 POSTGRES_PASS = os.getenv("POSTGRES_PASS", "")
 
+# Odoo Configuration
+ODOO_URL = os.getenv("ODOO_URL", "https://ocg.lan")
+ODOO_DB = os.getenv("ODOO_DB", "ocg_production")
+ODOO_USERNAME = os.getenv("ODOO_USERNAME", "loom@ocg.lan")
+ODOO_PASSWORD = os.getenv("ODOO_PASSWORD", "")
+ODOO_SEARCH_FIELDS = os.getenv("ODOO_SEARCH_FIELDS", "email,phone,name,website").split(",")
+ODOO_INCLUDE_CUSTOMERS = os.getenv("ODOO_INCLUDE_CUSTOMERS", "true").lower() == "true"
+ODOO_INCLUDE_OPPORTUNITIES = os.getenv("ODOO_INCLUDE_OPPORTUNITIES", "true").lower() == "true"
+
 # Ensure data directories exist
 CASES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -96,6 +116,15 @@ limiter = Limiter(key_func=get_remote_address)
 pg_pool = None
 http_client = None
 health_cache = {"data": None, "expires": None}
+
+# Odoo clients (initialized on startup)
+odoo_client = None
+odoo_read = None
+odoo_write = None
+odoo_proposals = {}  # Store pending proposals by ID
+
+# Running case tracking for abort functionality
+running_cases = {}  # Maps case_id -> asyncio.Task
 
 # ============================================================================
 # Prometheus Metrics
@@ -155,7 +184,7 @@ db_connections = Gauge(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Modern FastAPI lifespan management for startup/shutdown"""
-    global pg_pool, http_client
+    global pg_pool, http_client, odoo_client, odoo_read, odoo_write
 
     # Startup
     logger.info("🚀 Starting Loom OSINT Orchestration Platform...")
@@ -186,6 +215,28 @@ async def lifespan(app: FastAPI):
         follow_redirects=True
     )
     logger.info(f"✅ HTTP client initialized (SSL verify: {ssl_verify})")
+
+    # Initialize Odoo client
+    if ODOO_URL and ODOO_USERNAME and ODOO_PASSWORD:
+        try:
+            odoo_client = OdooClient(
+                url=ODOO_URL,
+                db=ODOO_DB,
+                username=ODOO_USERNAME,
+                password=ODOO_PASSWORD
+            )
+            # Test authentication
+            odoo_client.authenticate()
+            odoo_read = OdooReadOperations(odoo_client)
+            odoo_write = OdooWriteOperations(odoo_client)
+            logger.info("✅ Odoo client initialized and authenticated")
+        except Exception as e:
+            logger.warning(f"⚠️  Odoo unavailable: {e}")
+            odoo_client = None
+            odoo_read = None
+            odoo_write = None
+    else:
+        logger.info("ℹ️  Odoo credentials not configured - skipping initialization")
 
     logger.info("✅ Loom initialization complete")
 
@@ -664,65 +715,79 @@ async def run_osint_pipeline(case_id: str, case_create: CaseCreate) -> Dict[str,
     3. Synthesize unified report with Ollama
     4. Save results to filesystem, CouchDB, and PostgreSQL
     5. Return case metadata
+
+    Supports cancellation via asyncio.CancelledError
     """
 
-    # 1. Create case structure
-    create_case_directory(case_id)
+    try:
+        # 1. Create case structure
+        create_case_directory(case_id)
 
-    case_metadata = {
-        "case_id": case_id,
-        "title": case_create.title,
-        "description": case_create.description,
-        "target": case_create.target,
-        "tools_requested": case_create.tools,
-        "created_at": datetime.utcnow().isoformat(),
-        "status": "processing"
-    }
+        case_metadata = {
+            "case_id": case_id,
+            "title": case_create.title,
+            "description": case_create.description,
+            "target": case_create.target,
+            "tools_requested": case_create.tools,
+            "created_at": datetime.utcnow().isoformat(),
+            "status": "processing"
+        }
 
-    await save_case_metadata(case_id, case_metadata)
-    await log_to_postgres(case_id, "loom", "started", "case_created", case_metadata)
+        await save_case_metadata(case_id, case_metadata)
+        await log_to_postgres(case_id, "loom", "started", "case_created", case_metadata)
 
-    # 2. Execute tools
-    await log_to_postgres(case_id, "loom", "running", "executing_tools", {"tools": case_create.tools})
+        # 2. Execute tools
+        await log_to_postgres(case_id, "loom", "running", "executing_tools", {"tools": case_create.tools})
 
-    tool_results = await tool_registry.execute_tools(
-        case_create.target,
-        case_create.tools,
-        case_create.tool_options
-    )
-
-    # Save individual tool results
-    for result in tool_results:
-        tool_name = result.get("tool", "unknown")
-        await save_tool_results(case_id, tool_name, result)
-        await log_to_postgres(
-            case_id,
-            tool_name,
-            result.get("status", "unknown"),
-            "tool_completed",
-            {"results_count": len(result.get("results", []))}
+        tool_results = await tool_registry.execute_tools(
+            case_create.target,
+            case_create.tools,
+            case_create.tool_options
         )
 
-    case_metadata["tool_results"] = tool_results
-    case_metadata["status"] = "synthesizing"
-    await save_case_metadata(case_id, case_metadata)
+        # Save individual tool results
+        for result in tool_results:
+            tool_name = result.get("tool", "unknown")
+            await save_tool_results(case_id, tool_name, result)
+            await log_to_postgres(
+                case_id,
+                tool_name,
+                result.get("status", "unknown"),
+                "tool_completed",
+                {"results_count": len(result.get("results", []))}
+            )
 
-    # 3. Synthesize unified report
-    await log_to_postgres(case_id, "loom", "running", "synthesizing_report")
+        case_metadata["tool_results"] = tool_results
+        case_metadata["status"] = "synthesizing"
+        await save_case_metadata(case_id, case_metadata)
 
-    report = await synthesize_unified_report(case_metadata, tool_results)
-    await save_report(case_id, report)
+        # 3. Synthesize unified report
+        await log_to_postgres(case_id, "loom", "running", "synthesizing_report")
 
-    # 4. Mark complete
-    case_metadata["status"] = "completed"
-    case_metadata["completed_at"] = datetime.utcnow().isoformat()
-    await save_case_metadata(case_id, case_metadata)
+        report = await synthesize_unified_report(case_metadata, tool_results)
+        await save_report(case_id, report)
 
-    # 5. Save to CouchDB
-    await save_to_couchdb(case_id, case_metadata)
-    await log_to_postgres(case_id, "loom", "completed", "pipeline_finished")
+        # 4. Mark complete
+        case_metadata["status"] = "completed"
+        case_metadata["completed_at"] = datetime.utcnow().isoformat()
+        await save_case_metadata(case_id, case_metadata)
 
-    return case_metadata
+        # 5. Save to CouchDB
+        await save_to_couchdb(case_id, case_metadata)
+        await log_to_postgres(case_id, "loom", "completed", "pipeline_finished")
+
+        return case_metadata
+
+    except asyncio.CancelledError:
+        # Handle graceful cancellation/abort
+        logger.info(f"⚠️  Case {case_id} aborted by user")
+
+        case_metadata["status"] = "aborted"
+        case_metadata["aborted_at"] = datetime.utcnow().isoformat()
+        await save_case_metadata(case_id, case_metadata)
+        await log_to_postgres(case_id, "loom", "aborted", "pipeline_aborted", {"reason": "user_request"})
+
+        raise  # Re-raise to signal abortion
 
 # ============================================================================
 # API Endpoints
@@ -818,18 +883,8 @@ async def list_tools(request: Request):
         "tools": tool_registry.get_all_tools_status()
     }
 
-@app.post("/cases", response_model=PipelineStatus, dependencies=[Depends(verify_api_key)])
-@limiter.limit("10/minute")  # Limit case creation to prevent abuse
-async def create_case(request: Request, case_create: CaseCreate):
-    """Create a new case and run the OSINT orchestration pipeline"""
-
-    case_id = str(uuid.uuid4())[:8]
-    logger.info(f"🔍 Creating new case {case_id}: {case_create.title}")
-
-    # Track metrics
-    cases_created_total.inc()
-    active_cases.inc()
-
+async def _execute_pipeline_background(case_id: str, case_create: CaseCreate):
+    """Background task to execute pipeline with cleanup"""
     try:
         await run_osint_pipeline(case_id, case_create)
 
@@ -846,34 +901,50 @@ async def create_case(request: Request, case_create: CaseCreate):
                 tools_executed_total.labels(tool_name=result.get("tool"), status="error").inc()
 
         logger.info(f"✅ Case {case_id} completed: {len(tools_completed)} succeeded, {len(tools_failed)} failed")
-
         cases_completed_total.inc()
-        active_cases.dec()
 
-        return PipelineStatus(
-            case_id=case_id,
-            status="completed",
-            stage="report_generated",
-            tools_completed=tools_completed,
-            tools_failed=tools_failed,
-            message=f"Pipeline completed: {len(tools_completed)} tools succeeded, {len(tools_failed)} failed",
-            report_ready=True
-        )
+    except asyncio.CancelledError:
+        logger.info(f"⚠️  Case {case_id} aborted")
+        # Metadata already updated in run_osint_pipeline
 
     except Exception as e:
         logger.error(f"❌ Case {case_id} failed: {e}", exc_info=True)
         await log_to_postgres(case_id, "loom", "error", "pipeline_failed", {"error": str(e)})
-
         cases_failed_total.inc()
-        active_cases.dec()
 
-        return PipelineStatus(
-            case_id=case_id,
-            status="error",
-            stage="failed",
-            message=str(e),
-            report_ready=False
-        )
+    finally:
+        # Clean up task tracking
+        active_cases.dec()
+        if case_id in running_cases:
+            del running_cases[case_id]
+
+
+@app.post("/cases", response_model=PipelineStatus, dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")  # Limit case creation to prevent abuse
+async def create_case(request: Request, case_create: CaseCreate):
+    """Create a new case and run the OSINT orchestration pipeline in background"""
+
+    case_id = str(uuid.uuid4())[:8]
+    logger.info(f"🔍 Creating new case {case_id}: {case_create.title}")
+
+    # Track metrics
+    cases_created_total.inc()
+    active_cases.inc()
+
+    # Create and track background task
+    task = asyncio.create_task(_execute_pipeline_background(case_id, case_create))
+    running_cases[case_id] = task
+
+    # Return immediate response - client should poll for status
+    return PipelineStatus(
+        case_id=case_id,
+        status="processing",
+        stage="pipeline_started",
+        tools_completed=[],
+        tools_failed=[],
+        message="Pipeline execution started. Poll /cases/{case_id} for status.",
+        report_ready=False
+    )
 
 @app.get("/cases", dependencies=[Depends(verify_api_key)])
 @limiter.limit("60/minute")
@@ -907,6 +978,36 @@ async def get_case(request: Request, case_id: str):
         raise HTTPException(status_code=404, detail="Case not found")
 
     return metadata
+
+@app.post("/cases/{case_id}/abort", dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+async def abort_case(request: Request, case_id: str):
+    """Abort a running case execution"""
+
+    # Check if case is currently running
+    if case_id not in running_cases:
+        # Check if case exists but isn't running
+        metadata = await load_case_metadata(case_id)
+        if metadata:
+            status = metadata.get("status", "unknown")
+            if status in ["completed", "aborted", "failed"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Case {case_id} is not running (status: {status})"
+                )
+        raise HTTPException(status_code=404, detail=f"No running case found with ID {case_id}")
+
+    # Cancel the running task
+    task = running_cases[case_id]
+    task.cancel()
+
+    logger.info(f"🛑 Abort requested for case {case_id}")
+
+    return {
+        "case_id": case_id,
+        "status": "aborting",
+        "message": "Case execution is being aborted. Check case status for updates."
+    }
 
 @app.get("/cases/{case_id}/report", dependencies=[Depends(verify_api_key)])
 @limiter.limit("60/minute")
@@ -1015,6 +1116,460 @@ Be concise, practical, and actionable. If the user mentions a specific target, s
             status_code=500,
             detail=f"AI Assistant error: {str(e)}"
         )
+
+# ============================================================================
+# Odoo Integration Endpoints
+# ============================================================================
+
+@app.get("/odoo/status", dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
+async def odoo_status(request: Request):
+    """Check Odoo connection status"""
+    if not odoo_client:
+        return {
+            "connected": False,
+            "error": "Odoo client not configured"
+        }
+
+    try:
+        version = odoo_client.get_version()
+        return {
+            "connected": True,
+            "odoo_version": version.get("server_version"),
+            "database": ODOO_DB,
+            "username": ODOO_USERNAME
+        }
+    except Exception as e:
+        logger.error(f"Odoo status check failed: {e}")
+        return {
+            "connected": False,
+            "error": str(e)
+        }
+
+
+@app.post("/odoo/search/partners", dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
+async def search_odoo_partners(request: Request, payload: Dict[str, Any]):
+    """
+    Search for partners (contacts/companies) in Odoo.
+
+    Payload:
+        query: General search query
+        email: Search by email
+        phone: Search by phone
+        website: Search by website/domain
+        is_company: Filter companies (true) or individuals (false)
+        limit: Maximum results (default 100)
+    """
+    if not odoo_read:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    try:
+        results = odoo_read.search_partners(
+            query=payload.get("query"),
+            email=payload.get("email"),
+            phone=payload.get("phone"),
+            website=payload.get("website"),
+            is_company=payload.get("is_company"),
+            limit=payload.get("limit", 100)
+        )
+
+        logger.info(f"Found {len(results)} partners in Odoo")
+        return {
+            "count": len(results),
+            "partners": results
+        }
+
+    except Exception as e:
+        logger.error(f"Odoo partner search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/odoo/partners/{partner_id}", dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
+async def get_odoo_partner(request: Request, partner_id: int):
+    """Get full details and history for a specific partner"""
+    if not odoo_read:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    try:
+        history = odoo_read.get_partner_history(partner_id)
+        logger.info(f"Retrieved history for partner {partner_id}")
+        return history
+
+    except Exception as e:
+        logger.error(f"Odoo partner retrieval failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/odoo/search/leads", dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
+async def search_odoo_leads(request: Request, payload: Dict[str, Any]):
+    """Search for CRM leads/opportunities in Odoo"""
+    if not odoo_read:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    try:
+        results = odoo_read.search_leads(
+            partner_id=payload.get("partner_id"),
+            email=payload.get("email"),
+            name=payload.get("name"),
+            stage=payload.get("stage"),
+            limit=payload.get("limit", 100)
+        )
+
+        logger.info(f"Found {len(results)} leads in Odoo")
+        return {
+            "count": len(results),
+            "leads": results
+        }
+
+    except Exception as e:
+        logger.error(f"Odoo lead search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/odoo/search/projects", dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
+async def search_odoo_projects(request: Request, payload: Dict[str, Any]):
+    """Search for projects in Odoo"""
+    if not odoo_read:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    try:
+        results = odoo_read.search_projects(
+            partner_id=payload.get("partner_id"),
+            name=payload.get("name"),
+            limit=payload.get("limit", 100)
+        )
+
+        logger.info(f"Found {len(results)} projects in Odoo")
+        return {
+            "count": len(results),
+            "projects": results
+        }
+
+    except Exception as e:
+        logger.error(f"Odoo project search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/odoo/search/tasks", dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
+async def search_odoo_tasks(request: Request, payload: Dict[str, Any]):
+    """Search for project tasks in Odoo"""
+    if not odoo_read:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    try:
+        results = odoo_read.search_tasks(
+            project_id=payload.get("project_id"),
+            partner_id=payload.get("partner_id"),
+            name=payload.get("name"),
+            limit=payload.get("limit", 100)
+        )
+
+        logger.info(f"Found {len(results)} tasks in Odoo")
+        return {
+            "count": len(results),
+            "tasks": results
+        }
+
+    except Exception as e:
+        logger.error(f"Odoo task search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/odoo/search/activities", dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
+async def search_odoo_activities(request: Request, payload: Dict[str, Any]):
+    """Search for activities (planned actions) in Odoo"""
+    if not odoo_read:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    try:
+        results = odoo_read.search_activities(
+            partner_id=payload.get("partner_id"),
+            res_model=payload.get("res_model"),
+            res_id=payload.get("res_id"),
+            limit=payload.get("limit", 100)
+        )
+
+        logger.info(f"Found {len(results)} activities in Odoo")
+        return {
+            "count": len(results),
+            "activities": results
+        }
+
+    except Exception as e:
+        logger.error(f"Odoo activity search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/odoo/search/calendar", dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
+async def search_odoo_calendar(request: Request, payload: Dict[str, Any]):
+    """Search for calendar events in Odoo"""
+    if not odoo_read:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    try:
+        results = odoo_read.search_calendar_events(
+            partner_ids=payload.get("partner_ids"),
+            name=payload.get("name"),
+            limit=payload.get("limit", 100)
+        )
+
+        logger.info(f"Found {len(results)} calendar events in Odoo")
+        return {
+            "count": len(results),
+            "events": results
+        }
+
+    except Exception as e:
+        logger.error(f"Odoo calendar search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/odoo/propose/partner", dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+async def propose_odoo_partner(request: Request, payload: Dict[str, Any]):
+    """
+    Propose creating/updating a partner in Odoo.
+    Returns a JSON proposal that requires confirmation.
+    """
+    if not odoo_write:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    try:
+        proposal = odoo_write.propose_upsert_partner(
+            name=payload["name"],
+            email=payload.get("email"),
+            phone=payload.get("phone"),
+            website=payload.get("website"),
+            is_company=payload.get("is_company", True),
+            street=payload.get("street"),
+            city=payload.get("city"),
+            country_code=payload.get("country_code"),
+            comment=payload.get("comment"),
+            case_id=payload.get("case_id")
+        )
+
+        # Store proposal for later execution
+        odoo_proposals[proposal.proposal_id] = proposal
+
+        logger.info(f"Created Odoo proposal {proposal.proposal_id}")
+        return proposal.to_json()
+
+    except Exception as e:
+        logger.error(f"Odoo proposal creation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/odoo/propose/lead", dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+async def propose_odoo_lead(request: Request, payload: Dict[str, Any]):
+    """Propose creating a CRM lead/opportunity in Odoo"""
+    if not odoo_write:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    try:
+        proposal = odoo_write.propose_create_lead(
+            name=payload["name"],
+            partner_id=payload.get("partner_id"),
+            email_from=payload.get("email_from"),
+            phone=payload.get("phone"),
+            description=payload.get("description"),
+            expected_revenue=payload.get("expected_revenue"),
+            case_id=payload.get("case_id")
+        )
+
+        odoo_proposals[proposal.proposal_id] = proposal
+        logger.info(f"Created Odoo lead proposal {proposal.proposal_id}")
+        return proposal.to_json()
+
+    except Exception as e:
+        logger.error(f"Odoo lead proposal creation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/odoo/propose/project", dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+async def propose_odoo_project(request: Request, payload: Dict[str, Any]):
+    """Propose creating a project in Odoo"""
+    if not odoo_write:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    try:
+        from datetime import date
+        date_start = None
+        if payload.get("date_start"):
+            date_start = date.fromisoformat(payload["date_start"])
+
+        proposal = odoo_write.propose_create_project(
+            name=payload["name"],
+            partner_id=payload.get("partner_id"),
+            user_id=payload.get("user_id"),
+            date_start=date_start,
+            case_id=payload.get("case_id")
+        )
+
+        odoo_proposals[proposal.proposal_id] = proposal
+        logger.info(f"Created Odoo project proposal {proposal.proposal_id}")
+        return proposal.to_json()
+
+    except Exception as e:
+        logger.error(f"Odoo project proposal creation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/odoo/propose/tasks", dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+async def propose_odoo_tasks(request: Request, payload: Dict[str, Any]):
+    """Propose creating tasks in a project"""
+    if not odoo_write:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    try:
+        proposal = odoo_write.propose_create_tasks(
+            project_id=payload["project_id"],
+            tasks=payload["tasks"],
+            case_id=payload.get("case_id")
+        )
+
+        odoo_proposals[proposal.proposal_id] = proposal
+        logger.info(f"Created Odoo tasks proposal {proposal.proposal_id}")
+        return proposal.to_json()
+
+    except Exception as e:
+        logger.error(f"Odoo tasks proposal creation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/odoo/propose/activity", dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+async def propose_odoo_activity(request: Request, payload: Dict[str, Any]):
+    """Propose scheduling an activity"""
+    if not odoo_write:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    try:
+        from datetime import date
+        date_deadline = date.fromisoformat(payload["date_deadline"])
+
+        proposal = odoo_write.propose_schedule_activity(
+            res_model=payload["res_model"],
+            res_id=payload["res_id"],
+            activity_type=payload.get("activity_type", "To Do"),
+            summary=payload["summary"],
+            date_deadline=date_deadline,
+            user_id=payload.get("user_id"),
+            note=payload.get("note"),
+            case_id=payload.get("case_id")
+        )
+
+        odoo_proposals[proposal.proposal_id] = proposal
+        logger.info(f"Created Odoo activity proposal {proposal.proposal_id}")
+        return proposal.to_json()
+
+    except Exception as e:
+        logger.error(f"Odoo activity proposal creation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/odoo/propose/calendar-event", dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+async def propose_odoo_calendar_event(request: Request, payload: Dict[str, Any]):
+    """Propose creating a calendar event"""
+    if not odoo_write:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    try:
+        from datetime import datetime
+        start = datetime.fromisoformat(payload["start"])
+        stop = datetime.fromisoformat(payload["stop"])
+
+        proposal = odoo_write.propose_create_calendar_event(
+            name=payload["name"],
+            start=start,
+            stop=stop,
+            partner_ids=payload.get("partner_ids"),
+            location=payload.get("location"),
+            description=payload.get("description"),
+            case_id=payload.get("case_id")
+        )
+
+        odoo_proposals[proposal.proposal_id] = proposal
+        logger.info(f"Created Odoo calendar event proposal {proposal.proposal_id}")
+        return proposal.to_json()
+
+    except Exception as e:
+        logger.error(f"Odoo calendar event proposal creation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/odoo/execute/{proposal_id}", dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+async def execute_odoo_proposal(request: Request, proposal_id: str, payload: Dict[str, Any]):
+    """
+    Execute a confirmed Odoo proposal.
+
+    Requires explicit confirmation in payload: {"confirmed": true}
+    """
+    if not odoo_write:
+        raise HTTPException(status_code=503, detail="Odoo client not available")
+
+    # Check for explicit confirmation
+    if not payload.get("confirmed"):
+        raise HTTPException(
+            status_code=400,
+            detail="Proposal execution requires explicit confirmation: {\"confirmed\": true}"
+        )
+
+    # Retrieve proposal
+    proposal = odoo_proposals.get(proposal_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail=f"Proposal {proposal_id} not found")
+
+    try:
+        # Mark as confirmed
+        proposal.confirm()
+
+        # Execute
+        results = odoo_write.execute_proposal(proposal)
+
+        # Remove from pending proposals
+        del odoo_proposals[proposal_id]
+
+        logger.info(f"Executed Odoo proposal {proposal_id}")
+        return results
+
+    except Exception as e:
+        logger.error(f"Odoo proposal execution failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/odoo/proposals", dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
+async def list_odoo_proposals(request: Request):
+    """List all pending Odoo proposals"""
+    return {
+        "count": len(odoo_proposals),
+        "proposals": [p.to_json() for p in odoo_proposals.values()]
+    }
+
+
+@app.delete("/odoo/proposals/{proposal_id}", dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
+async def cancel_odoo_proposal(request: Request, proposal_id: str):
+    """Cancel a pending Odoo proposal"""
+    if proposal_id not in odoo_proposals:
+        raise HTTPException(status_code=404, detail=f"Proposal {proposal_id} not found")
+
+    del odoo_proposals[proposal_id]
+    logger.info(f"Cancelled Odoo proposal {proposal_id}")
+    return {"status": "cancelled", "proposal_id": proposal_id}
+
 
 if __name__ == "__main__":
     import uvicorn
