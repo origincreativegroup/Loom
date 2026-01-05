@@ -83,6 +83,33 @@ ssh -i keys/id_ed25519 admin@192.168.50.168 "recon-ng --version"
 
 ---
 
+## Step 1b: Setup SSH Keys for Pi-Forge (Optional)
+
+If you need SSH access to Pi-Forge for management or troubleshooting:
+
+### On NexusNAS (Loom host):
+
+```bash
+# Generate Ed25519 key for Pi-Forge
+ssh-keygen -t ed25519 -f keys/id_ed25519_piforge -N "" -C "loom-piforge@nexusnas"
+
+# Copy public key to Pi-Forge
+ssh-copy-id -i keys/id_ed25519_piforge.pub admin@192.168.50.157
+
+# Test authentication
+ssh -i keys/id_ed25519_piforge admin@192.168.50.157 "echo 'SSH connection successful!'"
+```
+
+**Or use the automated setup script:**
+
+```bash
+./setup-piforge-ssh.sh
+```
+
+This will guide you through the setup process and test the connection.
+
+---
+
 ## Step 2: Pull Required Docker Images
 
 TheHarvester and Sherlock run in Docker containers. Pull them on NexusNAS:

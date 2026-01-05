@@ -293,8 +293,11 @@ To access Loom remotely via WireGuard VPN:
 # Test from NexusNAS
 curl http://192.168.50.157:11434/api/tags
 
-# If fails, SSH to Pi-Forge
-ssh admin@192.168.50.157
+# If fails, SSH to Pi-Forge (using SSH key if configured)
+ssh -i keys/id_ed25519_piforge admin@192.168.50.157
+# Or if using password authentication:
+# ssh admin@192.168.50.157
+
 docker ps | grep ollama
 # Restart if needed
 ```

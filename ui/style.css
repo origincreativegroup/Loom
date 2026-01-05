@@ -1,23 +1,20 @@
 /* ============================================================================
-   Loom UI - TUI (Text User Interface) Style
-   Terminal/Command-line aesthetic with three-column operator layout
+   Loom UI - Styles
    ========================================================================== */
 
 :root {
-    /* TUI Terminal Colors */
-    --primary: #00ff00;        /* Terminal green */
-    --primary-dim: #00aa00;
-    --secondary: #808080;      /* Gray */
-    --success: #00ff00;        /* Green */
-    --error: #ff0000;          /* Red */
-    --warning: #ffaa00;        /* Amber */
-    --bg: #000000;             /* Pure black */
-    --bg-secondary: #0a0a0a;   /* Slightly lighter black */
-    --bg-tertiary: #1a1a1a;    /* Panel background */
-    --text: #00ff00;           /* Terminal green */
-    --text-secondary: #00aa00; /* Dimmer green */
-    --border: #00ff00;         /* Green borders */
-    --border-dim: #004400;     /* Dim borders */
+    --primary: #2563eb;
+    --primary-dark: #1e40af;
+    --secondary: #64748b;
+    --success: #10b981;
+    --error: #ef4444;
+    --warning: #f59e0b;
+    --bg: #0f172a;
+    --bg-secondary: #1e293b;
+    --bg-tertiary: #334155;
+    --text: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --border: #475569;
 }
 
 * {
@@ -27,531 +24,226 @@
 }
 
 body {
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Courier New', monospace;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+        'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
     background: var(--bg);
     color: var(--text);
-    line-height: 1.4;
+    line-height: 1.6;
     min-height: 100vh;
-    font-size: 13px;
 }
 
 .container {
-    max-width: 100%;
-    margin: 0;
-    padding: 0;
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
 }
 
 /* ============================================================================
-   Header - TUI Style
+   Header
    ========================================================================== */
 
 header {
-    padding: 0.5rem 1rem;
+    text-align: center;
+    margin-bottom: 3rem;
+    padding-bottom: 2rem;
     border-bottom: 1px solid var(--border);
-    background: var(--bg);
 }
 
 header h1 {
-    font-size: 1.2rem;
-    margin-bottom: 0.25rem;
-    color: var(--text);
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
+    font-size: 3rem;
+    margin-bottom: 0.5rem;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
 }
 
 .tagline {
     color: var(--text-secondary);
-    font-size: 0.85rem;
-    margin-bottom: 0.25rem;
-}
-
-.version {
-    color: var(--text-secondary);
-    font-size: 0.75rem;
-    margin-bottom: 0.5rem;
+    font-size: 1.1rem;
+    margin-bottom: 1rem;
 }
 
 .health-status {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 0.85rem;
+    background: var(--bg-secondary);
+    padding: 0.5rem 1rem;
+    border-radius: 2rem;
+    font-size: 0.9rem;
 }
 
 .status-dot {
-    width: 8px;
-    height: 8px;
-    border: 1px solid var(--text);
-    background: var(--bg);
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--secondary);
+    animation: pulse 2s infinite;
 }
 
 .status-dot.healthy {
     background: var(--success);
-    border-color: var(--success);
 }
 
 .status-dot.degraded {
     background: var(--warning);
-    border-color: var(--warning);
 }
 
 .status-dot.error {
     background: var(--error);
-    border-color: var(--error);
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
 }
 
 /* ============================================================================
-   Three-Column Layout - TUI Style
+   Cards
    ========================================================================== */
 
-.three-column-layout {
-    display: grid;
-    grid-template-columns: 300px 1fr 350px;
-    gap: 0;
-    flex: 1;
-    overflow: hidden;
-    border-top: 1px solid var(--border);
+.card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    padding: 2rem;
+    margin-bottom: 2rem;
 }
 
-.context-panel,
-.intent-panel,
-.insights-panel {
-    overflow-y: auto;
-    border-right: 1px solid var(--border-dim);
-    background: var(--bg);
+.card h2 {
+    margin-bottom: 1.5rem;
+    font-size: 1.5rem;
 }
 
-.intent-panel {
-    border-right: 1px solid var(--border-dim);
-}
-
-.insights-panel {
-    border-right: none;
-}
-
-.panel-section {
-    padding: 1rem;
-    border-bottom: 1px solid var(--border-dim);
-}
-
-.panel-section h2 {
-    font-size: 0.9rem;
-    margin-bottom: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text);
-    border-bottom: 1px solid var(--border-dim);
-    padding-bottom: 0.25rem;
-}
-
-.panel-section h3 {
-    font-size: 0.85rem;
-    margin-top: 1rem;
-    margin-bottom: 0.5rem;
+.card h3 {
+    margin-top: 2rem;
+    margin-bottom: 1rem;
+    font-size: 1.2rem;
     color: var(--text-secondary);
-    text-transform: uppercase;
 }
 
 /* ============================================================================
-   Forms - TUI Style
+   Forms
    ========================================================================== */
 
 .form-group {
-    margin-bottom: 1rem;
+    margin-bottom: 1.5rem;
 }
 
 label {
     display: block;
-    margin-bottom: 0.25rem;
-    font-weight: 700;
-    color: var(--text);
-    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+    color: var(--text-secondary);
 }
 
 input[type="text"],
-textarea,
-.search-input {
+textarea {
     width: 100%;
-    padding: 0.5rem;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-dim);
-    border-radius: 0;
+    padding: 0.75rem;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
     color: var(--text);
-    font-family: inherit;
-    font-size: 0.85rem;
+    font-size: 1rem;
+    transition: border-color 0.2s;
 }
 
 input[type="text"]:focus,
-textarea:focus,
-.search-input:focus {
+textarea:focus {
     outline: none;
-    border-color: var(--border);
-    background: var(--bg-tertiary);
+    border-color: var(--primary);
 }
 
 textarea {
     resize: vertical;
-}
-
-small {
-    display: block;
-    margin-top: 0.25rem;
-    color: var(--text-secondary);
-    font-size: 0.75rem;
+    font-family: inherit;
 }
 
 /* ============================================================================
-   Buttons - TUI Style
+   Buttons
    ========================================================================== */
 
 .btn {
-    padding: 0.5rem 1rem;
-    border: 1px solid var(--border);
-    border-radius: 0;
-    font-family: inherit;
-    font-size: 0.85rem;
-    font-weight: 700;
+    padding: 0.75rem 1.5rem;
+    border: none;
+    border-radius: 0.375rem;
+    font-size: 1rem;
+    font-weight: 600;
     cursor: pointer;
-    text-transform: uppercase;
-    background: var(--bg-secondary);
-    color: var(--text);
+    transition: all 0.2s;
 }
 
 .btn-primary {
-    background: var(--bg-tertiary);
-    color: var(--primary);
-    border-color: var(--primary);
+    background: var(--primary);
+    color: white;
 }
 
 .btn-primary:hover {
-    background: var(--primary);
-    color: var(--bg);
+    background: var(--primary-dark);
 }
 
 .btn-primary:disabled {
-    border-color: var(--secondary);
-    color: var(--secondary);
+    background: var(--secondary);
     cursor: not-allowed;
 }
 
 .btn-secondary {
-    background: var(--bg-secondary);
+    background: var(--bg-tertiary);
     color: var(--text);
-    border-color: var(--border-dim);
+    border: 1px solid var(--border);
 }
 
 .btn-secondary:hover {
-    border-color: var(--border);
-}
-
-.btn-sm {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-}
-
-.btn-abort {
-    background: var(--bg-secondary);
-    color: var(--error);
-    border-color: var(--error);
-    padding: 0.4rem 0.8rem;
-    font-weight: 700;
-}
-
-.btn-abort:hover {
-    background: var(--error);
-    color: var(--bg);
+    background: var(--border);
 }
 
 /* ============================================================================
-   Tool Selection - TUI Style
+   Pipeline Status
    ========================================================================== */
 
-.tool-grid {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
+.pipeline-status {
+    text-align: center;
+    padding: 2rem;
+    background: var(--bg-tertiary);
+    border-radius: 0.375rem;
+    margin-top: 1.5rem;
 }
-
-.tool-option {
-    display: flex;
-    align-items: start;
-    gap: 0.5rem;
-    background: var(--bg-secondary);
-    padding: 0.5rem;
-    border: 1px solid var(--border-dim);
-    border-radius: 0;
-    cursor: pointer;
-}
-
-.tool-option:hover {
-    border-color: var(--border);
-}
-
-.tool-option input[type="checkbox"] {
-    margin-top: 0.2rem;
-    width: 14px;
-    height: 14px;
-    cursor: pointer;
-}
-
-.tool-info {
-    flex: 1;
-}
-
-.tool-name {
-    font-weight: 700;
-    font-size: 0.85rem;
-    margin-bottom: 0.2rem;
-    text-transform: uppercase;
-    color: var(--text);
-}
-
-.tool-desc {
-    font-size: 0.75rem;
-    color: var(--text-secondary);
-}
-
-.location-badge {
-    display: inline-block;
-    padding: 0.1rem 0.4rem;
-    font-size: 0.7rem;
-    border: 1px solid;
-    margin: 0.2rem 0;
-}
-
-.location-badge.local {
-    border-color: var(--success);
-    color: var(--success);
-}
-
-.location-badge.remote {
-    border-color: var(--warning);
-    color: var(--warning);
-}
-
-/* ============================================================================
-   Case List - TUI Style
-   ========================================================================== */
-
-.search-container {
-    margin-bottom: 0.75rem;
-}
-
-#case-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-}
-
-.case-item {
-    background: var(--bg-secondary);
-    padding: 0.5rem;
-    border: 1px solid var(--border-dim);
-    border-left: 2px solid var(--border-dim);
-    cursor: pointer;
-}
-
-.case-item:hover {
-    border-left-color: var(--border);
-    border-color: var(--border);
-}
-
-.case-item-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: start;
-    margin-bottom: 0.3rem;
-}
-
-.case-item-title {
-    font-weight: 700;
-    font-size: 0.85rem;
-}
-
-.case-item-status {
-    padding: 0.1rem 0.4rem;
-    border: 1px solid;
-    font-size: 0.7rem;
-    font-weight: 700;
-}
-
-.case-item-status.completed {
-    border-color: var(--success);
-    color: var(--success);
-}
-
-.case-item-status.processing {
-    border-color: var(--warning);
-    color: var(--warning);
-}
-
-.case-item-status.error {
-    border-color: var(--error);
-    color: var(--error);
-}
-
-.case-item-meta {
-    color: var(--text-secondary);
-    font-size: 0.75rem;
-}
-
-.case-item-meta code {
-    color: var(--text);
-}
-
-.case-item-tools {
-    margin-top: 0.3rem;
-    font-size: 0.75rem;
-    color: var(--text-secondary);
-}
-
-.case-item-description {
-    margin-top: 0.3rem;
-    color: var(--text-secondary);
-    font-size: 0.75rem;
-}
-
-/* ============================================================================
-   Execution Plan - TUI Style
-   ========================================================================== */
-
-#execution-plan {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    padding: 1rem;
-}
-
-.plan-header h3 {
-    margin: 0 0 0.5rem 0;
-    font-size: 1rem;
-    text-transform: uppercase;
-}
-
-.plan-subtitle {
-    color: var(--text-secondary);
-    margin-bottom: 1rem;
-    font-size: 0.85rem;
-}
-
-.plan-section {
-    margin-bottom: 1rem;
-    padding: 0.75rem;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-dim);
-    border-left: 2px solid var(--border);
-}
-
-.plan-section h4 {
-    margin: 0 0 0.5rem 0;
-    color: var(--text);
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-
-.plan-section .meta {
-    color: var(--text-secondary);
-    font-size: 0.8rem;
-}
-
-.plan-list {
-    list-style: none;
-    padding: 0;
-    margin: 0.5rem 0 0 0;
-}
-
-.plan-list li {
-    padding: 0.4rem 0;
-    border-bottom: 1px solid var(--border-dim);
-    font-size: 0.8rem;
-}
-
-.plan-list li:last-child {
-    border-bottom: none;
-}
-
-.plan-actions {
-    display: flex;
-    gap: 0.5rem;
-    justify-content: flex-end;
-    margin-top: 1rem;
-}
-
-.target-id {
-    background: var(--bg-secondary);
-    padding: 0.4rem;
-    border: 1px solid var(--border-dim);
-    display: inline-block;
-}
-
-/* ============================================================================
-   Pipeline Status - TUI Style
-   ========================================================================== */
 
 .spinner {
-    width: 20px;
-    height: 20px;
-    margin: 0 auto 0.5rem;
-    border: 2px solid var(--border-dim);
+    width: 40px;
+    height: 40px;
+    margin: 0 auto 1rem;
+    border: 4px solid var(--border);
     border-top-color: var(--primary);
+    border-radius: 50%;
     animation: spin 1s linear infinite;
 }
 
 @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 #status-message {
     color: var(--text-secondary);
-    font-size: 0.85rem;
-    text-align: center;
-}
-
-.tool-progress {
-    margin-top: 1rem;
-    padding: 0.75rem;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-dim);
-}
-
-.execution-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.75rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid var(--border-dim);
-    font-size: 0.85rem;
-}
-
-.tool-status-item {
-    display: flex;
-    justify-content: space-between;
-    padding: 0.4rem;
-    margin-bottom: 0.4rem;
-    background: var(--bg-tertiary);
-    border-left: 2px solid var(--border-dim);
-    font-size: 0.8rem;
-}
-
-.tool-status-item .tool-state {
-    color: var(--text-secondary);
 }
 
 /* ============================================================================
-   Results - TUI Style
+   Results
    ========================================================================== */
 
 .results-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1rem;
+    margin-bottom: 1.5rem;
 }
 
 .results-header h2 {
@@ -559,37 +251,334 @@ small {
 }
 
 .case-info {
-    background: var(--bg-secondary);
-    padding: 0.75rem;
-    border: 1px solid var(--border-dim);
-    margin-bottom: 1rem;
-    font-size: 0.85rem;
+    background: var(--bg-tertiary);
+    padding: 1rem;
+    border-radius: 0.375rem;
+    margin-bottom: 2rem;
 }
 
 .case-info p {
-    margin-bottom: 0.4rem;
+    margin-bottom: 0.5rem;
 }
 
 .case-info p:last-child {
     margin-bottom: 0;
 }
 
-.case-info code {
-    background: var(--bg-tertiary);
-    padding: 0.2rem 0.4rem;
-    border: 1px solid var(--border-dim);
+.report-container {
+    margin-top: 2rem;
 }
 
+.report-content {
+    background: var(--bg-tertiary);
+    padding: 1.5rem;
+    border-radius: 0.375rem;
+    border-left: 4px solid var(--primary);
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.report-content h1,
+.report-content h2,
+.report-content h3 {
+    margin-top: 1.5rem;
+    margin-bottom: 0.75rem;
+    color: var(--text);
+}
+
+.report-content h1:first-child,
+.report-content h2:first-child,
+.report-content h3:first-child {
+    margin-top: 0;
+}
+
+.report-content p {
+    margin-bottom: 1rem;
+}
+
+.report-content ul,
+.report-content ol {
+    margin-left: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.report-content a {
+    color: var(--primary);
+    text-decoration: none;
+}
+
+.report-content a:hover {
+    text-decoration: underline;
+}
+
+.report-content code {
+    background: var(--bg);
+    padding: 0.2rem 0.4rem;
+    border-radius: 0.25rem;
+    font-size: 0.9em;
+}
+
+.report-content pre {
+    background: var(--bg);
+    padding: 1rem;
+    border-radius: 0.375rem;
+    overflow-x: auto;
+    margin-bottom: 1rem;
+}
+
+/* ============================================================================
+   Case List
+   ========================================================================== */
+
+#case-list {
+    display: grid;
+    gap: 1rem;
+}
+
+.case-item {
+    background: var(--bg-tertiary);
+    padding: 1rem;
+    border-radius: 0.375rem;
+    border-left: 4px solid var(--primary);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.case-item:hover {
+    background: var(--border);
+    transform: translateX(4px);
+}
+
+.case-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    margin-bottom: 0.5rem;
+}
+
+.case-item-title {
+    font-weight: 600;
+    font-size: 1.1rem;
+}
+
+.case-item-status {
+    padding: 0.25rem 0.75rem;
+    border-radius: 1rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.case-item-status.completed {
+    background: var(--success);
+    color: white;
+}
+
+.case-item-status.processing {
+    background: var(--warning);
+    color: white;
+}
+
+.case-item-status.error {
+    background: var(--error);
+    color: white;
+}
+
+.case-item-meta {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.case-item-description {
+    margin-top: 0.5rem;
+    color: var(--text-secondary);
+}
+
+.loading {
+    text-align: center;
+    color: var(--text-secondary);
+    padding: 2rem;
+}
+
+.error-message {
+    background: var(--error);
+    color: white;
+    padding: 1rem;
+    border-radius: 0.375rem;
+    margin-top: 1rem;
+}
+
+/* ============================================================================
+   Footer
+   ========================================================================== */
+
+footer {
+    text-align: center;
+    margin-top: 4rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+/* ============================================================================
+   Responsive
+   ========================================================================== */
+
+@media (max-width: 768px) {
+    .container {
+        padding: 1rem;
+    }
+
+    header h1 {
+        font-size: 2rem;
+    }
+
+    .card {
+        padding: 1.5rem;
+    }
+
+    .results-header {
+        flex-direction: column;
+        gap: 1rem;
+        align-items: stretch;
+    }
+}
+
+/* ============================================================================
+   Tool Selection Grid
+   ========================================================================== */
+
+.tool-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.tool-option {
+    display: flex;
+    align-items: start;
+    gap: 0.75rem;
+    background: var(--bg-tertiary);
+    padding: 1rem;
+    border-radius: 0.375rem;
+    border: 2px solid var(--border);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.tool-option:hover {
+    border-color: var(--primary);
+    transform: translateY(-2px);
+}
+
+.tool-option input[type="checkbox"] {
+    margin-top: 0.25rem;
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
+.tool-option input[type="checkbox"]:checked + .tool-info {
+    color: var(--primary);
+}
+
+.tool-info {
+    flex: 1;
+}
+
+.tool-name {
+    font-weight: 600;
+    font-size: 1.05rem;
+    margin-bottom: 0.25rem;
+    text-transform: capitalize;
+}
+
+.tool-desc {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.tool-option.loading {
+    justify-content: center;
+    color: var(--text-secondary);
+}
+
+/* ============================================================================
+   Tool Progress Tracking
+   ========================================================================== */
+
+.tool-progress {
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background: var(--bg);
+    border-radius: 0.375rem;
+}
+
+.tool-status-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+    background: var(--bg-tertiary);
+    border-radius: 0.25rem;
+}
+
+.tool-status-item .tool-name {
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+.tool-status-item .tool-state {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.tool-status-item .tool-state.queued {
+    color: var(--text-secondary);
+}
+
+.tool-status-item .tool-state.running {
+    color: var(--warning);
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.tool-status-item .tool-state.completed {
+    color: var(--success);
+}
+
+.tool-status-item .tool-state.failed {
+    color: var(--error);
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+/* ============================================================================
+   Tool Results Display
+   ========================================================================== */
+
 .tool-results {
+    margin-top: 2rem;
+}
+
+#individual-tool-results {
+    display: grid;
+    gap: 1rem;
     margin-top: 1rem;
 }
 
 .tool-result-card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-dim);
-    border-left: 2px solid var(--border-dim);
+    background: var(--bg-tertiary);
+    border-radius: 0.5rem;
     overflow: hidden;
-    margin-bottom: 0.75rem;
+    border-left: 4px solid var(--border);
 }
 
 .tool-result-card.success {
@@ -604,344 +593,196 @@ small {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.6rem;
-    background: var(--bg-tertiary);
-    border-bottom: 1px solid var(--border-dim);
+    padding: 1rem;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
 }
 
 .tool-result-header h4 {
     margin: 0;
-    text-transform: uppercase;
-    font-size: 0.85rem;
+    text-transform: capitalize;
 }
 
 .tool-result-body {
-    padding: 0.75rem;
-    font-size: 0.85rem;
+    padding: 1rem;
 }
 
 .tool-result-body details {
-    margin-top: 0.75rem;
+    margin-top: 1rem;
 }
 
 .tool-result-body summary {
     cursor: pointer;
     color: var(--primary);
-    font-weight: 700;
-    padding: 0.4rem;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-dim);
+    font-weight: 500;
+    padding: 0.5rem;
+    background: var(--bg);
+    border-radius: 0.25rem;
 }
 
 .tool-result-body summary:hover {
-    border-color: var(--border);
+    background: var(--bg-secondary);
 }
 
 .tool-result-body pre {
     margin-top: 0.5rem;
-    max-height: 300px;
+    max-height: 400px;
     overflow-y: auto;
-    background: var(--bg);
-    padding: 0.75rem;
-    border: 1px solid var(--border-dim);
-    font-size: 0.75rem;
-}
-
-.report-container {
-    margin-top: 1rem;
-}
-
-.report-content {
-    background: var(--bg-secondary);
-    padding: 1rem;
-    border: 1px solid var(--border-dim);
-    border-left: 2px solid var(--border);
-    max-height: 500px;
-    overflow-y: auto;
-    font-size: 0.85rem;
-}
-
-.report-actions {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 0.75rem;
 }
 
 /* ============================================================================
-   Status Badges - TUI Style
+   Status Badges
    ========================================================================== */
 
 .status-badge {
-    padding: 0.1rem 0.4rem;
-    border: 1px solid;
-    font-size: 0.75rem;
-    font-weight: 700;
+    padding: 0.25rem 0.75rem;
+    border-radius: 1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
 }
 
 .status-badge.completed,
 .status-badge.success {
-    border-color: var(--success);
-    color: var(--success);
+    background: var(--success);
+    color: white;
 }
 
 .status-badge.processing,
 .status-badge.running {
-    border-color: var(--warning);
-    color: var(--warning);
+    background: var(--warning);
+    color: white;
 }
 
 .status-badge.error,
 .status-badge.failed {
-    border-color: var(--error);
-    color: var(--error);
+    background: var(--error);
+    color: white;
+}
+
+.status-badge.idle,
+.status-badge.queued {
+    background: var(--secondary);
+    color: white;
 }
 
 /* ============================================================================
-   System Insights Panel - TUI Style
+   Version Badge
    ========================================================================== */
 
-.insight-section {
+.version {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-top: -0.5rem;
     margin-bottom: 1rem;
-    padding: 0.75rem;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-dim);
 }
 
-.insight-section h3 {
-    margin: 0 0 0.5rem 0;
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    border-bottom: 1px solid var(--border-dim);
-    padding-bottom: 0.25rem;
-}
+/* ============================================================================
+   Enhanced Case Items
+   ========================================================================== */
 
-.insight-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-}
-
-.insight-list li {
-    padding: 0.3rem 0;
-    border-bottom: 1px solid var(--border-dim);
-    font-size: 0.75rem;
-}
-
-.insight-list li:last-child {
-    border-bottom: none;
-}
-
-.status-log {
-    max-height: 400px;
-    overflow-y: auto;
-    font-size: 0.75rem;
-}
-
-.log-entry {
-    padding: 0.3rem 0;
-    border-bottom: 1px solid var(--border-dim);
+.case-item-tools {
+    margin-top: 0.5rem;
+    font-size: 0.9rem;
     color: var(--text-secondary);
 }
 
-.log-entry:last-child {
-    border-bottom: none;
-}
+/* ============================================================================
+   Small Text Helpers
+   ========================================================================== */
 
-.log-entry.success {
-    color: var(--success);
-}
-
-.log-entry.error {
-    color: var(--error);
-}
-
-.log-entry.warning {
-    color: var(--warning);
+small {
+    display: block;
+    margin-top: 0.25rem;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
 }
 
 /* ============================================================================
-   Query System - TUI Style (Compact for Left Panel)
+   AI Chat Assistant
    ========================================================================== */
 
-.query-container-compact {
+.chat-container {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 1rem;
+    margin-top: 1rem;
 }
 
-.query-messages-compact {
-    max-height: 200px;
+.chat-messages {
+    max-height: 400px;
     overflow-y: auto;
-    border: 1px solid var(--border-dim);
-    padding: 0.5rem;
-    background: var(--bg-secondary);
-    font-size: 0.75rem;
-}
-
-.query-message {
-    margin-bottom: 0.75rem;
-    padding: 0.5rem;
-    border-left: 2px solid var(--border-dim);
-    line-height: 1.3;
-    font-size: 0.75rem;
-}
-
-.query-message.user {
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    padding: 1rem;
     background: var(--bg-tertiary);
-    border-left-color: var(--primary);
 }
 
-.query-message.system {
-    background: var(--bg-secondary);
-    border-left-color: var(--success);
+.chat-message {
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    border-radius: 0.375rem;
+    line-height: 1.5;
 }
 
-.query-message.loading {
+.chat-message.user {
+    background: var(--primary);
+    color: white;
+    margin-left: 20%;
+}
+
+.chat-message.assistant {
+    background: var(--bg);
+    border-left: 3px solid var(--primary);
+}
+
+.chat-message.loading {
     opacity: 0.7;
 }
 
-.query-message ul {
-    margin: 0.3rem 0 0 1rem;
+.typing-indicator {
+    font-style: italic;
+    animation: pulse 2s infinite;
 }
 
-.query-message li {
-    font-size: 0.7rem;
-}
-
-.processing {
-    font-style: normal;
-}
-
-.query-input-container-compact {
+.chat-input-container {
     display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.5rem;
+    align-items: flex-end;
 }
 
-.query-input-container-compact textarea {
+.chat-input-container textarea {
     flex: 1;
-    font-size: 0.75rem;
-    padding: 0.4rem;
+}
+
+.chat-input-container .btn {
+    height: fit-content;
 }
 
 /* ============================================================================
-   Loading & Error States - TUI Style
+   Responsive Updates
    ========================================================================== */
 
-.loading {
-    text-align: center;
-    color: var(--text-secondary);
-    padding: 1rem;
-    font-size: 0.85rem;
-}
-
-.error-message {
-    background: var(--bg-secondary);
-    color: var(--error);
-    padding: 0.75rem;
-    border: 1px solid var(--error);
-    margin-top: 0.75rem;
-    font-size: 0.85rem;
-}
-
-/* ============================================================================
-   Code Elements - TUI Style
-   ========================================================================== */
-
-code {
-    font-family: inherit;
-    background: var(--bg-tertiary);
-    padding: 0.2rem 0.4rem;
-    border: 1px solid var(--border-dim);
-    font-size: 0.85em;
-}
-
-pre {
-    background: var(--bg);
-    padding: 0.75rem;
-    border: 1px solid var(--border-dim);
-    overflow-x: auto;
-    margin-bottom: 0.75rem;
-    font-size: 0.75rem;
-}
-
-pre code {
-    background: none;
-    border: none;
-    padding: 0;
-}
-
-/* ============================================================================
-   Footer - TUI Style
-   ========================================================================== */
-
-footer {
-    text-align: center;
-    padding: 0.5rem;
-    border-top: 1px solid var(--border);
-    color: var(--text-secondary);
-    font-size: 0.75rem;
-}
-
-/* ============================================================================
-   Scrollbar - TUI Style
-   ========================================================================== */
-
-::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-}
-
-::-webkit-scrollbar-track {
-    background: var(--bg);
-    border-left: 1px solid var(--border-dim);
-}
-
-::-webkit-scrollbar-thumb {
-    background: var(--border-dim);
-    border: 1px solid var(--border-dim);
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: var(--border);
-}
-
-/* ============================================================================
-   Responsive Layout
-   ========================================================================== */
-
-@media (max-width: 1200px) {
-    .three-column-layout {
-        grid-template-columns: 250px 1fr 300px;
-    }
-}
-
-@media (max-width: 900px) {
-    .three-column-layout {
+@media (max-width: 768px) {
+    .tool-grid {
         grid-template-columns: 1fr;
-        grid-template-rows: auto auto auto;
     }
 
-    .context-panel,
-    .intent-panel,
-    .insights-panel {
-        border-right: none;
-        border-bottom: 1px solid var(--border-dim);
+    .tool-result-header {
+        flex-direction: column;
+        align-items: start;
+        gap: 0.5rem;
     }
-}
 
-/* ============================================================================
-   Utility Classes
-   ========================================================================== */
+    .chat-message.user {
+        margin-left: 0;
+    }
 
-.success {
-    color: var(--success);
-}
+    .chat-input-container {
+        flex-direction: column;
+        align-items: stretch;
+    }
 
-.error {
-    color: var(--error);
-}
-
-.warning {
-    color: var(--warning);
+    .chat-input-container .btn {
+        width: 100%;
+    }
 }

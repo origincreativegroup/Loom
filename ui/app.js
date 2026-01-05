@@ -1,7 +1,6 @@
 /**
- * Loom OSINT Orchestration Platform - Frontend Application v3.0
- * Philosophy-aligned: Intent → Plan → Confirm → Execute
- * No anthropomorphism, no blind execution, full interruptibility
+ * Loom OSINT Orchestration Platform - Frontend Application v2.1
+ * Enhanced with improved UX, search, export, and error handling
  */
 
 // ============================================================================
@@ -14,19 +13,8 @@ const API_BASE_URL = window.location.hostname === 'localhost'
 
 let API_KEY = localStorage.getItem('loom_api_key') || '';
 let availableTools = [];
-let allCases = [];
-let currentReport = null;
-let currentCaseId = null;  // Track current executing case for abort
-
-// Tool location mapping (local vs remote)
-const TOOL_LOCATIONS = {
-    'searxng': { type: 'local', endpoint: 'pi-core:8888' },
-    'recon-ng': { type: 'local', endpoint: 'pi-core (SSH)' },
-    'theharvester': { type: 'local', endpoint: 'Docker (local)' },
-    'sherlock': { type: 'local', endpoint: 'Docker (local)' },
-    'spiderfoot': { type: 'remote', endpoint: 'spider.lan (API)' },
-    'intelowl': { type: 'remote', endpoint: 'intelowl.lan (API)' }
-};
+let allCases = [];  // Store all cases for filtering
+let currentReport = null;  // Store current report for export
 
 // ============================================================================
 // Utility Functions
@@ -55,7 +43,7 @@ async function apiRequest(endpoint, options = {}) {
 
         if (!response.ok) {
             if (response.status === 403) {
-                const key = prompt('API Key required. Enter API key:');
+                const key = prompt('API Key required. Please enter your API key:');
                 if (key) {
                     API_KEY = key;
                     localStorage.setItem('loom_api_key', key);
@@ -108,12 +96,12 @@ function showToast(message, type = 'info') {
 
 function copyToClipboard(text, buttonId = null) {
     navigator.clipboard.writeText(text).then(() => {
-        showToast('Copied to clipboard', 'success');
+        showToast('Copied to clipboard!', 'success');
         if (buttonId) {
             const button = document.getElementById(buttonId);
             if (button) {
                 const originalText = button.textContent;
-                button.textContent = '✓ Copied';
+                button.textContent = '✓ Copied!';
                 button.disabled = true;
                 setTimeout(() => {
                     button.textContent = originalText;
@@ -137,7 +125,7 @@ function exportReport(caseId, report) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    showToast('Report exported', 'success');
+    showToast('Report exported successfully!', 'success');
 }
 
 function filterCases(searchTerm) {
@@ -158,30 +146,39 @@ function filterCases(searchTerm) {
     renderCaseList(filtered);
 
     if (filtered.length > 0) {
-        showToast(`Found ${filtered.length} case(s)`, 'info');
+        showToast(`Found ${filtered.length} matching case(s)`, 'info');
     } else {
-        showToast('No matching cases', 'info');
+        showToast('No matching cases found', 'info');
     }
 }
 
 // ============================================================================
-// Markdown Rendering
+// Markdown Rendering (Improved)
 // ============================================================================
 
 function renderMarkdown(text) {
     let html = text
+        // Headers
         .replace(/^### (.*$)/gim, '<h3>$1</h3>')
         .replace(/^## (.*$)/gim, '<h2>$1</h2>')
         .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+        // Bold
         .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
+        // Italic
         .replace(/\*(.*?)\*/gim, '<em>$1</em>')
+        // Code blocks
         .replace(/```([^`]+)```/gim, '<pre><code>$1</code></pre>')
+        // Inline code
         .replace(/`([^`]+)`/gim, '<code>$1</code>')
+        // Links
         .replace(/\[([^\]]+)\]\(([^\)]+)\)/gim, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+        // Lists (unordered)
         .replace(/^\s*\-\s+(.*)$/gim, '<li>$1</li>')
+        // Line breaks
         .replace(/\n\n/gim, '</p><p>')
         .replace(/\n/gim, '<br>');
 
+    // Wrap lists
     html = html.replace(/(<li>.*<\/li>)/gim, '<ul>$1</ul>');
 
     return `<p>${html}</p>`;
@@ -212,404 +209,25 @@ function renderToolSelection() {
         return;
     }
 
-    toolGrid.innerHTML = availableTools.map(tool => {
-        const location = TOOL_LOCATIONS[tool.name] || { type: 'unknown', endpoint: 'Unknown' };
-        const locationBadge = location.type === 'local'
-            ? `<span class="location-badge local">⚡ Local: ${location.endpoint}</span>`
-            : `<span class="location-badge remote">🌐 Remote: ${location.endpoint}</span>`;
-
-        return `
-            <label class="tool-option" title="${tool.description}">
-                <input
-                    type="checkbox"
-                    name="tools"
-                    value="${tool.name}"
-                    ${tool.name === 'searxng' ? 'checked' : ''}
-                >
-                <div class="tool-info">
-                    <div class="tool-name">${tool.name}</div>
-                    ${locationBadge}
-                    <div class="tool-desc">${tool.description}</div>
-                </div>
-            </label>
-        `;
-    }).join('');
+    toolGrid.innerHTML = availableTools.map(tool => `
+        <label class="tool-option" title="${tool.description}">
+            <input
+                type="checkbox"
+                name="tools"
+                value="${tool.name}"
+                ${tool.name === 'searxng' ? 'checked' : ''}
+            >
+            <div class="tool-info">
+                <div class="tool-name">${tool.name}</div>
+                <div class="tool-desc">${tool.description}</div>
+            </div>
+        </label>
+    `).join('');
 }
 
 function getSelectedTools() {
     const checkboxes = document.querySelectorAll('input[name="tools"]:checked');
     return Array.from(checkboxes).map(cb => cb.value);
-}
-
-// ============================================================================
-// System Insights Panel
-// ============================================================================
-
-function addLogEntry(message, type = 'info') {
-    const statusLog = document.getElementById('status-log');
-    const entry = document.createElement('p');
-    entry.className = `log-entry ${type}`;
-    entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
-    statusLog.appendChild(entry);
-
-    // Auto-scroll to bottom
-    statusLog.scrollTop = statusLog.scrollHeight;
-
-    // Keep only last 100 entries
-    const entries = statusLog.querySelectorAll('.log-entry');
-    if (entries.length > 100) {
-        entries[0].remove();
-    }
-}
-
-function updateInsights(plan) {
-    // Show dependencies
-    const depsSection = document.getElementById('dependencies-section');
-    const depsList = document.getElementById('dependencies-list');
-
-    depsList.innerHTML = `
-        <li>Target type: ${plan.targetType}</li>
-        <li>Tools: ${plan.toolCount} selected</li>
-        <li>Est. duration: ${plan.estimate}</li>
-    `;
-    depsSection.style.display = 'block';
-
-    // Show external calls
-    const callsSection = document.getElementById('external-calls-section');
-    const callsList = document.getElementById('external-calls-list');
-
-    callsList.innerHTML = plan.externalCalls.map(call => {
-        const icon = call.type === 'local' ? '[LOCAL]' : '[REMOTE]';
-        return `<li>${icon} ${call.tool} → ${call.endpoint}</li>`;
-    }).join('');
-    callsSection.style.display = 'block';
-
-    // Show assumptions
-    const assumptionsSection = document.getElementById('assumptions-section');
-    const assumptionsList = document.getElementById('assumptions-list');
-
-    assumptionsList.innerHTML = plan.assumptions.length > 0
-        ? plan.assumptions.map(a => `<li>${a}</li>`).join('')
-        : '<li>None identified</li>';
-    assumptionsSection.style.display = 'block';
-
-    // Show current operation
-    const operationSection = document.getElementById('current-operation');
-    const operationDetails = document.getElementById('operation-details');
-    operationDetails.innerHTML = `
-        <p>Status: Planning</p>
-        <p>Target: <code>${plan.target}</code></p>
-    `;
-    operationSection.style.display = 'block';
-
-    addLogEntry('Execution plan generated');
-}
-
-function clearInsights() {
-    document.getElementById('dependencies-section').style.display = 'none';
-    document.getElementById('external-calls-section').style.display = 'none';
-    document.getElementById('assumptions-section').style.display = 'none';
-    document.getElementById('current-operation').style.display = 'none';
-}
-
-// ============================================================================
-// Execution Plan Generation
-// ============================================================================
-
-function generateExecutionPlan(caseData) {
-    const selectedTools = caseData.tools;
-    const target = caseData.target;
-
-    // Analyze target type
-    let targetType = 'Unknown';
-    let assumptions = [];
-
-    if (/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(target)) {
-        targetType = 'Domain';
-        assumptions.push('DNS resolution available');
-        assumptions.push('WHOIS lookup permitted');
-    } else if (/^(\d{1,3}\.){3}\d{1,3}$/.test(target)) {
-        targetType = 'IPv4 Address';
-        assumptions.push('Network reachability');
-    } else if (/^@/.test(target)) {
-        targetType = 'Username/Handle';
-        assumptions.push('Social media platforms accessible');
-    } else if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) {
-        targetType = 'Email Address';
-        assumptions.push('Email enumeration permitted');
-    }
-
-    // Calculate dependencies and external calls
-    const externalCalls = selectedTools.map(tool => {
-        const location = TOOL_LOCATIONS[tool] || { type: 'unknown', endpoint: 'Unknown' };
-        return {
-            tool,
-            type: location.type,
-            endpoint: location.endpoint
-        };
-    });
-
-    // Estimate duration (rough heuristic: 30s-90s per tool)
-    const minDuration = selectedTools.length * 30;
-    const maxDuration = selectedTools.length * 90;
-    const estimate = `${Math.floor(minDuration / 60)}-${Math.ceil(maxDuration / 60)} minutes`;
-
-    return {
-        target,
-        targetType,
-        tools: selectedTools,
-        toolCount: selectedTools.length,
-        externalCalls,
-        assumptions,
-        estimate,
-        caseData
-    };
-}
-
-function showExecutionPlan(plan) {
-    const planContainer = document.getElementById('execution-plan');
-
-    const externalCallsList = plan.externalCalls.map(call => {
-        const icon = call.type === 'local' ? '⚡' : '🌐';
-        return `<li><code>${call.tool}</code> → ${icon} ${call.endpoint}</li>`;
-    }).join('');
-
-    const assumptionsList = plan.assumptions.length > 0
-        ? plan.assumptions.map(a => `<li>${a}</li>`).join('')
-        : '<li>None identified</li>';
-
-    planContainer.innerHTML = `
-        <div class="plan-header">
-            <h3>Execution Plan Review</h3>
-            <p class="plan-subtitle">Review before execution. No action taken until confirmed.</p>
-        </div>
-
-        <div class="plan-section">
-            <h4>Target</h4>
-            <p><code class="target-id">${plan.target}</code></p>
-            <p class="meta">Type: ${plan.targetType}</p>
-        </div>
-
-        <div class="plan-section">
-            <h4>External Calls</h4>
-            <p class="meta">${plan.toolCount} tool(s) will execute</p>
-            <ul class="plan-list">${externalCallsList}</ul>
-        </div>
-
-        <div class="plan-section">
-            <h4>Assumptions</h4>
-            <ul class="plan-list">${assumptionsList}</ul>
-        </div>
-
-        <div class="plan-section">
-            <h4>Estimated Duration</h4>
-            <p>${plan.estimate}</p>
-        </div>
-
-        <div class="plan-actions">
-            <button class="btn btn-secondary" id="cancel-plan-btn">Cancel</button>
-            <button class="btn btn-primary" id="confirm-plan-btn">Confirm Execute</button>
-        </div>
-    `;
-
-    // Update insights panel
-    updateInsights(plan);
-
-    // Show plan, hide form
-    hideElement('case-form');
-    showElement('execution-plan');
-
-    // Add event handlers
-    document.getElementById('cancel-plan-btn').addEventListener('click', () => {
-        hideElement('execution-plan');
-        showElement('case-form');
-        clearInsights();
-        addLogEntry('Execution plan cancelled', 'warning');
-        showToast('Execution cancelled', 'info');
-    });
-
-    document.getElementById('confirm-plan-btn').addEventListener('click', async () => {
-        await executeCase(plan.caseData);
-    });
-}
-
-// ============================================================================
-// Case Execution (After Confirmation)
-// ============================================================================
-
-// Poll case status until completion
-let statusPollInterval = null;
-
-async function pollCaseStatus(caseId) {
-    try {
-        const caseDetails = await apiRequest(`/cases/${caseId}`);
-        const status = caseDetails.status;
-
-        if (status === 'completed') {
-            // Stop polling
-            if (statusPollInterval) {
-                clearInterval(statusPollInterval);
-                statusPollInterval = null;
-            }
-
-            addLogEntry('Pipeline completed successfully', 'success');
-            document.getElementById('status-message').textContent = 'Pipeline completed. Loading results...';
-            showToast('Investigation complete', 'success');
-
-            const report = await apiRequest(`/cases/${caseId}/report`);
-            displayResults(caseDetails, report.report);
-            loadCases();
-
-            // Reset form
-            document.getElementById('case-form').reset();
-            renderToolSelection();
-            currentCaseId = null;
-
-        } else if (status === 'aborted') {
-            // Stop polling
-            if (statusPollInterval) {
-                clearInterval(statusPollInterval);
-                statusPollInterval = null;
-            }
-
-            addLogEntry('Pipeline aborted', 'warning');
-            document.getElementById('status-message').textContent = 'Pipeline aborted by user';
-            showToast('Execution aborted', 'warning');
-
-            // Show form again
-            setTimeout(() => {
-                hideElement('pipeline-status');
-                showElement('case-form');
-                clearInsights();
-            }, 3000);
-            currentCaseId = null;
-
-        } else if (status === 'failed' || status === 'error') {
-            // Stop polling
-            if (statusPollInterval) {
-                clearInterval(statusPollInterval);
-                statusPollInterval = null;
-            }
-
-            addLogEntry('Pipeline failed', 'error');
-            document.getElementById('status-message').innerHTML = `
-                <span class="error-message">Execution failed</span>
-                <p>Check case details for error information</p>
-            `;
-            showToast('Pipeline failed', 'error');
-
-            // Show form again
-            setTimeout(() => {
-                hideElement('pipeline-status');
-                showElement('case-form');
-                clearInsights();
-            }, 5000);
-            currentCaseId = null;
-        }
-        // Otherwise keep polling (status is still "processing")
-
-    } catch (error) {
-        console.error('Status poll error:', error);
-        addLogEntry(`Status check failed: ${error.message}`, 'error');
-    }
-}
-
-async function executeCase(caseData) {
-    const planContainer = document.getElementById('execution-plan');
-    const statusDiv = document.getElementById('pipeline-status');
-    const statusMessage = document.getElementById('status-message');
-    const toolProgress = document.getElementById('tool-progress');
-
-    try {
-        // Update insights - operation started
-        const operationDetails = document.getElementById('operation-details');
-        operationDetails.innerHTML = `
-            <p>Status: <span class="warning">EXECUTING</span></p>
-            <p>Target: <code>${caseData.target}</code></p>
-            <p>Tools: ${caseData.tools.length}</p>
-        `;
-        addLogEntry('Execution started', 'success');
-
-        // Hide plan, show execution status
-        hideElement('execution-plan');
-        showElement('pipeline-status');
-        statusMessage.textContent = 'Executing OSINT pipeline...';
-
-        // Show tool progress with abort button
-        toolProgress.innerHTML = `
-            <div class="execution-header">
-                <span>Running ${caseData.tools.length} tool(s)...</span>
-                <button class="btn btn-abort" id="abort-btn">Abort Execution</button>
-            </div>
-            ${caseData.tools.map(tool => `
-                <div class="tool-status-item" id="tool-status-${tool}">
-                    <span class="tool-name">${tool}</span>
-                    <span class="tool-state">Queued</span>
-                </div>
-            `).join('')}
-        `;
-
-        // Execute case
-        const result = await apiRequest('/cases', {
-            method: 'POST',
-            body: JSON.stringify(caseData)
-        });
-
-        currentCaseId = result.case_id;
-        addLogEntry(`Case created: ${currentCaseId}`, 'info');
-
-        // Add abort handler
-        document.getElementById('abort-btn').addEventListener('click', async () => {
-            if (!currentCaseId) {
-                showToast('No active case to abort', 'warning');
-                return;
-            }
-
-            addLogEntry('Abort requested', 'warning');
-
-            try {
-                const abortResult = await apiRequest(`/cases/${currentCaseId}/abort`, {
-                    method: 'POST'
-                });
-                addLogEntry('Abort signal sent', 'warning');
-                showToast('Aborting execution...', 'warning');
-
-                // Disable abort button
-                const abortBtn = document.getElementById('abort-btn');
-                if (abortBtn) {
-                    abortBtn.disabled = true;
-                    abortBtn.textContent = 'Aborting...';
-                }
-            } catch (error) {
-                addLogEntry(`Abort failed: ${error.message}`, 'error');
-                showToast(`Abort failed: ${error.message}`, 'error');
-            }
-        });
-
-        // Start polling for status updates (every 2 seconds)
-        statusPollInterval = setInterval(() => pollCaseStatus(currentCaseId), 2000);
-
-        // Also poll immediately
-        await pollCaseStatus(currentCaseId);
-
-    } catch (error) {
-        console.error('Execution error:', error);
-        statusMessage.innerHTML = `
-            <span class="error-message">Execution failed</span>
-            <p>What failed: ${error.message}</p>
-            <p>What remains safe: Form inputs preserved, no data written</p>
-        `;
-        showToast(`Execution failed: ${error.message}`, 'error');
-        addLogEntry(`Execution error: ${error.message}`, 'error');
-
-        // Show form again
-        setTimeout(() => {
-            hideElement('pipeline-status');
-            showElement('case-form');
-            clearInsights();
-        }, 5000);
-        currentCaseId = null;
-    }
 }
 
 // ============================================================================
@@ -643,18 +261,143 @@ async function checkHealth() {
 }
 
 // ============================================================================
-// Results Display
+// Case Management
 // ============================================================================
 
+async function createCase(caseData) {
+    const submitBtn = document.getElementById('submit-btn');
+    const statusDiv = document.getElementById('pipeline-status');
+    const statusMessage = document.getElementById('status-message');
+    const toolProgress = document.getElementById('tool-progress');
+
+    try {
+        // Disable form
+        submitBtn.disabled = true;
+        showElement('pipeline-status');
+        statusMessage.textContent = 'Starting OSINT pipeline...';
+        showToast('Starting investigation...', 'info');
+
+        // Show tool progress
+        toolProgress.innerHTML = caseData.tools.map(tool => `
+            <div class="tool-status-item" id="tool-status-${tool}">
+                <span class="tool-name">${tool}</span>
+                <span class="tool-state">Queued</span>
+            </div>
+        `).join('');
+
+        // Create case (returns immediately with queued status)
+        const result = await apiRequest('/cases', {
+            method: 'POST',
+            body: JSON.stringify(caseData)
+        });
+
+        const caseId = result.case_id;
+        statusMessage.textContent = result.message || 'Pipeline started...';
+
+        // Poll for status updates
+        await pollCaseStatus(caseId, statusMessage, toolProgress, caseData.tools);
+
+    } catch (error) {
+        console.error('Error creating case:', error);
+        statusMessage.innerHTML = `<span class="error-message">Error: ${error.message}</span>`;
+        showToast(`Investigation failed: ${error.message}`, 'error');
+    } finally {
+        submitBtn.disabled = false;
+        setTimeout(() => {
+            hideElement('pipeline-status');
+            toolProgress.innerHTML = '';
+        }, 2000);
+    }
+}
+
+async function pollCaseStatus(caseId, statusMessage, toolProgress, tools) {
+    const maxAttempts = 300; // 5 minutes max (1 second intervals)
+    let attempts = 0;
+    let pollInterval;
+
+    return new Promise((resolve, reject) => {
+        pollInterval = setInterval(async () => {
+            attempts++;
+
+            try {
+                const status = await apiRequest(`/cases/${caseId}/status`);
+
+                // Update status message
+                statusMessage.textContent = status.message || `Status: ${status.status}`;
+
+                // Update tool progress based on completed/failed lists
+                tools.forEach(tool => {
+                    const toolElement = document.getElementById(`tool-status-${tool}`);
+                    if (toolElement) {
+                        const stateSpan = toolElement.querySelector('.tool-state');
+                        if (status.tools_completed.includes(tool)) {
+                            stateSpan.textContent = 'Completed';
+                            stateSpan.className = 'tool-state completed';
+                        } else if (status.tools_failed.includes(tool)) {
+                            stateSpan.textContent = 'Failed';
+                            stateSpan.className = 'tool-state failed';
+                        } else if (status.status === 'processing' || status.status === 'synthesizing') {
+                            stateSpan.textContent = 'Running...';
+                            stateSpan.className = 'tool-state running';
+                        } else if (status.status === 'queued') {
+                            stateSpan.textContent = 'Queued';
+                            stateSpan.className = 'tool-state queued';
+                        }
+                    }
+                });
+
+                // Check if pipeline is complete
+                if (status.status === 'completed') {
+                    clearInterval(pollInterval);
+                    statusMessage.textContent = 'Pipeline completed! Loading results...';
+                    showToast('Investigation complete!', 'success');
+
+                    // Load full case details
+                    const caseDetails = await apiRequest(`/cases/${caseId}`);
+                    const report = await apiRequest(`/cases/${caseId}/report`);
+
+                    // Show results
+                    displayResults(caseDetails, report.report);
+
+                    // Refresh case list
+                    loadCases();
+
+                    // Reset form
+                    document.getElementById('case-form').reset();
+                    renderToolSelection(); // Re-check default tools
+
+                    resolve(status);
+                } else if (status.status === 'error') {
+                    clearInterval(pollInterval);
+                    throw new Error(status.message || 'Pipeline failed');
+                }
+
+                // Timeout after max attempts
+                if (attempts >= maxAttempts) {
+                    clearInterval(pollInterval);
+                    throw new Error('Pipeline timeout - check status manually');
+                }
+
+            } catch (error) {
+                clearInterval(pollInterval);
+                reject(error);
+            }
+        }, 1000); // Poll every second
+    });
+}
+
 function displayResults(caseData, report) {
+    // Store current report for export
     currentReport = { caseId: caseData.case_id, report: report };
 
+    // Basic info
     document.getElementById('result-case-id').textContent = caseData.case_id;
     document.getElementById('result-title').textContent = caseData.title;
     document.getElementById('result-target').textContent = caseData.target;
     document.getElementById('result-status').textContent = caseData.status;
     document.getElementById('result-status').className = `status-badge ${caseData.status}`;
 
+    // Tools used
     const toolResults = caseData.tool_results || [];
     const toolsSuccessful = toolResults.filter(r => r.status === 'success').map(r => r.tool);
     const toolsFailed = toolResults.filter(r => r.status === 'error').map(r => r.tool);
@@ -664,6 +407,7 @@ function displayResults(caseData, report) {
         ${toolsFailed.length > 0 ? `<span class="error"> (Failed: ${toolsFailed.join(', ')})</span>` : ''}
     `;
 
+    // Individual tool results
     const toolResultsDiv = document.getElementById('individual-tool-results');
     toolResultsDiv.innerHTML = toolResults.map(toolResult => `
         <div class="tool-result-card ${toolResult.status}">
@@ -679,23 +423,20 @@ function displayResults(caseData, report) {
                         <pre><code>${JSON.stringify(toolResult.results, null, 2)}</code></pre>
                     </details>
                 ` : `
-                    <p class="error-message">
-                        <strong>What failed:</strong> ${toolResult.error}<br>
-                        <strong>What was attempted:</strong> ${toolResult.tool} execution on target<br>
-                        <strong>What remains safe:</strong> Other tool results preserved
-                    </p>
+                    <p class="error-message"><strong>Error:</strong> ${toolResult.error}</p>
                 `}
             </div>
         </div>
     `).join('');
 
+    // Unified report with action buttons
     const reportActions = `
         <div class="report-actions">
             <button class="btn btn-secondary" id="copy-report-btn" onclick="copyToClipboard(currentReport.report, 'copy-report-btn')">
-                Copy Report
+                📋 Copy Report
             </button>
             <button class="btn btn-secondary" onclick="exportReport(currentReport.caseId, currentReport.report)">
-                Export Markdown
+                💾 Export Markdown
             </button>
         </div>
     `;
@@ -703,21 +444,11 @@ function displayResults(caseData, report) {
     document.getElementById('report-content').innerHTML = reportActions + renderMarkdown(report);
 
     hideElement('new-case-section');
-    hideElement('pipeline-status');
     showElement('results-section');
 
-    // Update insights - completed
-    const operationDetails = document.getElementById('operation-details');
-    operationDetails.innerHTML = `
-        <p>Status: <span class="success">COMPLETED</span></p>
-        <p>Case ID: <code>${caseData.case_id}</code></p>
-    `;
-    addLogEntry(`Case ${caseData.case_id} loaded`, 'success');
+    // Scroll to results
+    document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
 }
-
-// ============================================================================
-// Case List Management
-// ============================================================================
 
 async function loadCases() {
     const caseList = document.getElementById('case-list');
@@ -726,11 +457,12 @@ async function loadCases() {
         const data = await apiRequest('/cases');
 
         if (data.cases.length === 0) {
-            caseList.innerHTML = '<p class="loading">No cases yet. Create one above.</p>';
+            caseList.innerHTML = '<p class="loading">No cases yet. Create one above!</p>';
             allCases = [];
             return;
         }
 
+        // Sort by created date (newest first) and store globally
         allCases = data.cases.sort((a, b) =>
             new Date(b.created_at) - new Date(a.created_at)
         );
@@ -758,7 +490,7 @@ function renderCaseList(cases) {
                 <div class="case-item-status ${caseItem.status}">${caseItem.status}</div>
             </div>
             <div class="case-item-meta">
-                Case ID: <code>${caseItem.case_id}</code> | Target: <code>${caseItem.target}</code> | Created: ${formatDate(caseItem.created_at)}
+                Case ID: ${caseItem.case_id} | Target: ${caseItem.target} | Created: ${formatDate(caseItem.created_at)}
             </div>
             <div class="case-item-tools">
                 Tools: ${(caseItem.tools_used || []).join(', ')}
@@ -767,6 +499,7 @@ function renderCaseList(cases) {
         </div>
     `).join('');
 
+    // Add click handlers
     document.querySelectorAll('.case-item').forEach(item => {
         item.addEventListener('click', async () => {
             const caseId = item.dataset.caseId;
@@ -789,35 +522,40 @@ async function loadCaseDetails(caseId) {
 }
 
 // ============================================================================
-// Query System (formerly "AI Assistant")
+// AI Research Assistant
 // ============================================================================
 
-async function sendQuery() {
-    const queryInput = document.getElementById('query-input');
-    const message = queryInput.value.trim();
+async function sendChatMessage() {
+    const chatInput = document.getElementById('chat-input');
+    const message = chatInput.value.trim();
 
     if (!message) {
-        showToast('Enter a query', 'error');
+        showToast('Please enter a message', 'error');
         return;
     }
 
-    const queryMessages = document.getElementById('query-messages');
+    const chatMessages = document.getElementById('chat-messages');
 
+    // Add user message to chat
     const userMessageDiv = document.createElement('div');
-    userMessageDiv.className = 'query-message user';
-    userMessageDiv.innerHTML = `<strong>Query:</strong> <code>${message}</code>`;
-    queryMessages.appendChild(userMessageDiv);
+    userMessageDiv.className = 'chat-message user';
+    userMessageDiv.innerHTML = `<strong>You:</strong> ${message}`;
+    chatMessages.appendChild(userMessageDiv);
 
-    queryInput.value = '';
+    // Clear input
+    chatInput.value = '';
 
+    // Show loading indicator
     const loadingDiv = document.createElement('div');
-    loadingDiv.className = 'query-message system loading';
-    loadingDiv.innerHTML = '<strong>System:</strong> <span class="processing">Processing...</span>';
-    queryMessages.appendChild(loadingDiv);
+    loadingDiv.className = 'chat-message assistant loading';
+    loadingDiv.innerHTML = '<strong>Assistant:</strong> <span class="typing-indicator">Thinking...</span>';
+    chatMessages.appendChild(loadingDiv);
 
-    queryMessages.scrollTop = queryMessages.scrollHeight;
+    // Scroll to bottom
+    chatMessages.scrollTop = chatMessages.scrollHeight;
 
     try {
+        // Get current context (if viewing a case)
         const context = {};
         const currentTarget = document.getElementById('result-target');
         if (currentTarget && currentTarget.textContent) {
@@ -832,19 +570,22 @@ async function sendQuery() {
             })
         });
 
+        // Remove loading indicator
         loadingDiv.remove();
 
-        const systemMessageDiv = document.createElement('div');
-        systemMessageDiv.className = 'query-message system';
-        systemMessageDiv.innerHTML = `<strong>System:</strong> ${renderMarkdown(response.response)}`;
-        queryMessages.appendChild(systemMessageDiv);
+        // Add assistant response
+        const assistantMessageDiv = document.createElement('div');
+        assistantMessageDiv.className = 'chat-message assistant';
+        assistantMessageDiv.innerHTML = `<strong>Assistant:</strong> ${renderMarkdown(response.response)}`;
+        chatMessages.appendChild(assistantMessageDiv);
 
-        queryMessages.scrollTop = queryMessages.scrollHeight;
+        // Scroll to bottom
+        chatMessages.scrollTop = chatMessages.scrollHeight;
 
     } catch (error) {
         loadingDiv.remove();
-        showToast('Query failed', 'error');
-        console.error('Query error:', error);
+        showToast('Failed to get response from AI assistant', 'error');
+        console.error('Chat error:', error);
     }
 }
 
@@ -853,15 +594,15 @@ async function sendQuery() {
 // ============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Form submission - generate plan instead of executing
-    document.getElementById('case-form').addEventListener('submit', (e) => {
+    // Form submission
+    document.getElementById('case-form').addEventListener('submit', async (e) => {
         e.preventDefault();
 
         const formData = new FormData(e.target);
         const selectedTools = getSelectedTools();
 
         if (selectedTools.length === 0) {
-            showToast('Select at least one tool', 'error');
+            showToast('Please select at least one OSINT tool', 'error');
             return;
         }
 
@@ -873,9 +614,7 @@ document.addEventListener('DOMContentLoaded', () => {
             tool_options: {}
         };
 
-        // Generate and show execution plan (don't execute yet)
-        const plan = generateExecutionPlan(caseData);
-        showExecutionPlan(plan);
+        await createCase(caseData);
     });
 
     // New case button
@@ -885,21 +624,34 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('new-case-section').scrollIntoView({ behavior: 'smooth' });
     });
 
-    // Search input (already in HTML, just add handler)
+    // Search input (create if doesn't exist)
+    const caseHistorySection = document.querySelector('#case-list').parentElement;
+    const searchContainer = document.createElement('div');
+    searchContainer.className = 'search-container';
+    searchContainer.innerHTML = `
+        <input
+            type="text"
+            id="case-search"
+            placeholder="🔍 Search cases by title, target, ID, or description..."
+            class="search-input"
+        />
+    `;
+    caseHistorySection.insertBefore(searchContainer, caseHistorySection.querySelector('h2').nextSibling);
+
     document.getElementById('case-search').addEventListener('input', (e) => {
         filterCases(e.target.value);
     });
 
-    // Query system
-    document.getElementById('send-query-btn').addEventListener('click', sendQuery);
-    document.getElementById('query-input').addEventListener('keydown', (e) => {
+    // AI Chat Assistant
+    document.getElementById('send-chat-btn').addEventListener('click', sendChatMessage);
+    document.getElementById('chat-input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            sendQuery();
+            sendChatMessage();
         }
     });
 
-    // Initialize
+    // Initialize the app
     init();
 });
 
@@ -908,27 +660,25 @@ document.addEventListener('DOMContentLoaded', () => {
 // ============================================================================
 
 async function init() {
-    console.log('Loom OSINT Orchestration Platform - Initializing...');
+    console.log('🕸️ Loom OSINT Orchestration Platform v2.1 - Initializing...');
 
-    addLogEntry('System initializing...', 'info');
-
+    // Load available tools
     await loadAvailableTools();
-    addLogEntry('Tools loaded', 'success');
 
+    // Check health
     await checkHealth();
-    addLogEntry('Health check complete', 'success');
 
+    // Load existing cases
     await loadCases();
-    addLogEntry('Cases loaded', 'success');
 
+    // Refresh health every 30 seconds
     setInterval(checkHealth, 30000);
 
-    console.log('Loom initialized');
-    addLogEntry('System ready', 'success');
-    showToast('Loom ready', 'success');
+    console.log('✅ Loom initialized successfully');
+    showToast('Loom OSINT Platform Ready', 'success');
 }
 
-// Add CSS animations
+// Add CSS animations for toasts
 const style = document.createElement('style');
 style.textContent = `
     @keyframes slideIn {
@@ -965,7 +715,6 @@ style.textContent = `
         border-radius: 0.375rem;
         color: var(--text);
         font-size: 1rem;
-        font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
         transition: border-color 0.2s;
     }
 
@@ -983,152 +732,6 @@ style.textContent = `
 
     .report-actions .btn {
         flex: 0 0 auto;
-    }
-
-    /* Location badges */
-    .location-badge {
-        display: inline-block;
-        padding: 0.125rem 0.5rem;
-        font-size: 0.75rem;
-        border-radius: 0.25rem;
-        margin: 0.25rem 0;
-        font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-    }
-
-    .location-badge.local {
-        background: var(--success);
-        color: white;
-    }
-
-    .location-badge.remote {
-        background: var(--warning);
-        color: white;
-    }
-
-    /* Execution plan */
-    #execution-plan {
-        background: var(--bg-secondary);
-        border: 1px solid var(--border);
-        border-radius: 0.5rem;
-        padding: 2rem;
-    }
-
-    .plan-header h3 {
-        margin: 0 0 0.5rem 0;
-    }
-
-    .plan-subtitle {
-        color: var(--text-secondary);
-        margin-bottom: 1.5rem;
-    }
-
-    .plan-section {
-        margin-bottom: 1.5rem;
-        padding: 1rem;
-        background: var(--bg-tertiary);
-        border-radius: 0.375rem;
-        border-left: 4px solid var(--primary);
-    }
-
-    .plan-section h4 {
-        margin: 0 0 0.75rem 0;
-        color: var(--text-secondary);
-        font-size: 0.9rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-
-    .plan-section .meta {
-        color: var(--text-secondary);
-        font-size: 0.9rem;
-    }
-
-    .plan-list {
-        list-style: none;
-        padding: 0;
-        margin: 0.5rem 0 0 0;
-    }
-
-    .plan-list li {
-        padding: 0.5rem 0;
-        border-bottom: 1px solid var(--border);
-    }
-
-    .plan-list li:last-child {
-        border-bottom: none;
-    }
-
-    .plan-actions {
-        display: flex;
-        gap: 0.5rem;
-        justify-content: flex-end;
-        margin-top: 1.5rem;
-    }
-
-    .target-id {
-        font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-        background: var(--bg);
-        padding: 0.5rem;
-        border-radius: 0.25rem;
-        display: inline-block;
-    }
-
-    /* Abort button */
-    .btn-abort {
-        background: var(--error);
-        color: white;
-        padding: 0.5rem 1rem;
-        border: none;
-        border-radius: 0.375rem;
-        cursor: pointer;
-        font-weight: 600;
-    }
-
-    .btn-abort:hover {
-        opacity: 0.8;
-    }
-
-    .execution-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 1rem;
-        padding-bottom: 0.5rem;
-        border-bottom: 1px solid var(--border);
-    }
-
-    /* System identifiers in monospace */
-    .case-info code,
-    .case-item-meta code,
-    .tool-name {
-        font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-    }
-
-    /* Query system (non-anthropomorphic) */
-    .query-message {
-        margin-bottom: 1rem;
-        padding: 0.75rem;
-        border-radius: 0.375rem;
-        line-height: 1.5;
-    }
-
-    .query-message.user {
-        background: var(--bg);
-        border-left: 3px solid var(--primary);
-    }
-
-    .query-message.system {
-        background: var(--bg-tertiary);
-        border-left: 3px solid var(--success);
-    }
-
-    .query-message.loading {
-        opacity: 0.7;
-    }
-
-    .processing {
-        font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-        font-style: normal;
     }
 `;
 document.head.appendChild(style);
