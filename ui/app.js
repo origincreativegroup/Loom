@@ -1,5 +1,6 @@
 /**
- * Loom OSINT Orchestration Platform - Frontend Application v2.0
+ * Loom OSINT Orchestration Platform - Frontend Application v2.1
+ * Enhanced with improved UX, search, export, and error handling
  */
 
 // ============================================================================
@@ -12,6 +13,8 @@ const API_BASE_URL = window.location.hostname === 'localhost'
 
 let API_KEY = localStorage.getItem('loom_api_key') || '';
 let availableTools = [];
+let allCases = [];  // Store all cases for filtering
+let currentReport = null;  // Store current report for export
 
 // ============================================================================
 // Utility Functions
@@ -32,24 +35,30 @@ async function apiRequest(endpoint, options = {}) {
         headers['X-API-Key'] = API_KEY;
     }
 
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        ...options,
-        headers
-    });
+    try {
+        const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+            ...options,
+            headers
+        });
 
-    if (!response.ok) {
-        if (response.status === 403) {
-            const key = prompt('API Key required. Please enter your API key:');
-            if (key) {
-                API_KEY = key;
-                localStorage.setItem('loom_api_key', key);
-                return apiRequest(endpoint, options);
+        if (!response.ok) {
+            if (response.status === 403) {
+                const key = prompt('API Key required. Please enter your API key:');
+                if (key) {
+                    API_KEY = key;
+                    localStorage.setItem('loom_api_key', key);
+                    return apiRequest(endpoint, options);
+                }
+                throw new Error('API key required');
             }
+            throw new Error(`API request failed: ${response.statusText}`);
         }
-        throw new Error(`API request failed: ${response.statusText}`);
-    }
 
-    return response.json();
+        return response.json();
+    } catch (error) {
+        showToast(`Request failed: ${error.message}`, 'error');
+        throw error;
+    }
 }
 
 function showElement(id) {
@@ -60,8 +69,91 @@ function hideElement(id) {
     document.getElementById(id).style.display = 'none';
 }
 
+function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    toast.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 1rem 1.5rem;
+        background: ${type === 'error' ? 'var(--error)' : type === 'success' ? 'var(--success)' : 'var(--primary)'};
+        color: white;
+        border-radius: 0.375rem;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        z-index: 10000;
+        animation: slideIn 0.3s ease-out;
+        max-width: 400px;
+    `;
+    document.body.appendChild(toast);
+
+    setTimeout(() => {
+        toast.style.animation = 'slideOut 0.3s ease-out';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+function copyToClipboard(text, buttonId = null) {
+    navigator.clipboard.writeText(text).then(() => {
+        showToast('Copied to clipboard!', 'success');
+        if (buttonId) {
+            const button = document.getElementById(buttonId);
+            if (button) {
+                const originalText = button.textContent;
+                button.textContent = '✓ Copied!';
+                button.disabled = true;
+                setTimeout(() => {
+                    button.textContent = originalText;
+                    button.disabled = false;
+                }, 2000);
+            }
+        }
+    }).catch(err => {
+        showToast('Failed to copy', 'error');
+        console.error('Copy failed:', err);
+    });
+}
+
+function exportReport(caseId, report) {
+    const blob = new Blob([report], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `loom-report-${caseId}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('Report exported successfully!', 'success');
+}
+
+function filterCases(searchTerm) {
+    const term = searchTerm.toLowerCase().trim();
+
+    if (!term) {
+        renderCaseList(allCases);
+        return;
+    }
+
+    const filtered = allCases.filter(caseItem =>
+        caseItem.title.toLowerCase().includes(term) ||
+        caseItem.target.toLowerCase().includes(term) ||
+        caseItem.case_id.toLowerCase().includes(term) ||
+        (caseItem.description && caseItem.description.toLowerCase().includes(term))
+    );
+
+    renderCaseList(filtered);
+
+    if (filtered.length > 0) {
+        showToast(`Found ${filtered.length} matching case(s)`, 'info');
+    } else {
+        showToast('No matching cases found', 'info');
+    }
+}
+
 // ============================================================================
-// Markdown Rendering
+// Markdown Rendering (Improved)
 // ============================================================================
 
 function renderMarkdown(text) {
@@ -79,10 +171,15 @@ function renderMarkdown(text) {
         // Inline code
         .replace(/`([^`]+)`/gim, '<code>$1</code>')
         // Links
-        .replace(/\[([^\]]+)\]\(([^\)]+)\)/gim, '<a href="$2" target="_blank">$1</a>')
+        .replace(/\[([^\]]+)\]\(([^\)]+)\)/gim, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+        // Lists (unordered)
+        .replace(/^\s*\-\s+(.*)$/gim, '<li>$1</li>')
         // Line breaks
         .replace(/\n\n/gim, '</p><p>')
         .replace(/\n/gim, '<br>');
+
+    // Wrap lists
+    html = html.replace(/(<li>.*<\/li>)/gim, '<ul>$1</ul>');
 
     return `<p>${html}</p>`;
 }
@@ -113,7 +210,7 @@ function renderToolSelection() {
     }
 
     toolGrid.innerHTML = availableTools.map(tool => `
-        <label class="tool-option">
+        <label class="tool-option" title="${tool.description}">
             <input
                 type="checkbox"
                 name="tools"
@@ -178,6 +275,7 @@ async function createCase(caseData) {
         submitBtn.disabled = true;
         showElement('pipeline-status');
         statusMessage.textContent = 'Starting OSINT pipeline...';
+        showToast('Starting investigation...', 'info');
 
         // Show tool progress
         toolProgress.innerHTML = caseData.tools.map(tool => `
@@ -195,6 +293,7 @@ async function createCase(caseData) {
 
         if (result.status === 'completed') {
             statusMessage.textContent = 'Pipeline completed! Loading results...';
+            showToast('Investigation complete!', 'success');
 
             // Load full case details
             const caseDetails = await apiRequest(`/cases/${result.case_id}`);
@@ -216,6 +315,7 @@ async function createCase(caseData) {
     } catch (error) {
         console.error('Error creating case:', error);
         statusMessage.innerHTML = `<span class="error-message">Error: ${error.message}</span>`;
+        showToast(`Investigation failed: ${error.message}`, 'error');
     } finally {
         submitBtn.disabled = false;
         setTimeout(() => {
@@ -226,6 +326,9 @@ async function createCase(caseData) {
 }
 
 function displayResults(caseData, report) {
+    // Store current report for export
+    currentReport = { caseId: caseData.case_id, report: report };
+
     // Basic info
     document.getElementById('result-case-id').textContent = caseData.case_id;
     document.getElementById('result-title').textContent = caseData.title;
@@ -265,8 +368,19 @@ function displayResults(caseData, report) {
         </div>
     `).join('');
 
-    // Unified report
-    document.getElementById('report-content').innerHTML = renderMarkdown(report);
+    // Unified report with action buttons
+    const reportActions = `
+        <div class="report-actions">
+            <button class="btn btn-secondary" id="copy-report-btn" onclick="copyToClipboard(currentReport.report, 'copy-report-btn')">
+                📋 Copy Report
+            </button>
+            <button class="btn btn-secondary" onclick="exportReport(currentReport.caseId, currentReport.report)">
+                💾 Export Markdown
+            </button>
+        </div>
+    `;
+
+    document.getElementById('report-content').innerHTML = reportActions + renderMarkdown(report);
 
     hideElement('new-case-section');
     showElement('results-section');
@@ -283,37 +397,16 @@ async function loadCases() {
 
         if (data.cases.length === 0) {
             caseList.innerHTML = '<p class="loading">No cases yet. Create one above!</p>';
+            allCases = [];
             return;
         }
 
-        // Sort by created date (newest first)
-        const sortedCases = data.cases.sort((a, b) =>
+        // Sort by created date (newest first) and store globally
+        allCases = data.cases.sort((a, b) =>
             new Date(b.created_at) - new Date(a.created_at)
         );
 
-        caseList.innerHTML = sortedCases.map(caseItem => `
-            <div class="case-item" data-case-id="${caseItem.case_id}">
-                <div class="case-item-header">
-                    <div class="case-item-title">${caseItem.title}</div>
-                    <div class="case-item-status ${caseItem.status}">${caseItem.status}</div>
-                </div>
-                <div class="case-item-meta">
-                    Case ID: ${caseItem.case_id} | Target: ${caseItem.target} | Created: ${formatDate(caseItem.created_at)}
-                </div>
-                <div class="case-item-tools">
-                    Tools: ${(caseItem.tools_used || []).join(', ')}
-                </div>
-                ${caseItem.description ? `<div class="case-item-description">${caseItem.description}</div>` : ''}
-            </div>
-        `).join('');
-
-        // Add click handlers
-        document.querySelectorAll('.case-item').forEach(item => {
-            item.addEventListener('click', async () => {
-                const caseId = item.dataset.caseId;
-                await loadCaseDetails(caseId);
-            });
-        });
+        renderCaseList(allCases);
 
     } catch (error) {
         console.error('Error loading cases:', error);
@@ -321,15 +414,117 @@ async function loadCases() {
     }
 }
 
+function renderCaseList(cases) {
+    const caseList = document.getElementById('case-list');
+
+    if (cases.length === 0) {
+        caseList.innerHTML = '<p class="loading">No matching cases found</p>';
+        return;
+    }
+
+    caseList.innerHTML = cases.map(caseItem => `
+        <div class="case-item" data-case-id="${caseItem.case_id}">
+            <div class="case-item-header">
+                <div class="case-item-title">${caseItem.title}</div>
+                <div class="case-item-status ${caseItem.status}">${caseItem.status}</div>
+            </div>
+            <div class="case-item-meta">
+                Case ID: ${caseItem.case_id} | Target: ${caseItem.target} | Created: ${formatDate(caseItem.created_at)}
+            </div>
+            <div class="case-item-tools">
+                Tools: ${(caseItem.tools_used || []).join(', ')}
+            </div>
+            ${caseItem.description ? `<div class="case-item-description">${caseItem.description}</div>` : ''}
+        </div>
+    `).join('');
+
+    // Add click handlers
+    document.querySelectorAll('.case-item').forEach(item => {
+        item.addEventListener('click', async () => {
+            const caseId = item.dataset.caseId;
+            await loadCaseDetails(caseId);
+        });
+    });
+}
+
 async function loadCaseDetails(caseId) {
     try {
+        showToast('Loading case details...', 'info');
         const caseData = await apiRequest(`/cases/${caseId}`);
         const report = await apiRequest(`/cases/${caseId}/report`);
 
         displayResults(caseData, report.report);
     } catch (error) {
         console.error('Error loading case details:', error);
-        alert('Failed to load case details');
+        showToast('Failed to load case details', 'error');
+    }
+}
+
+// ============================================================================
+// AI Research Assistant
+// ============================================================================
+
+async function sendChatMessage() {
+    const chatInput = document.getElementById('chat-input');
+    const message = chatInput.value.trim();
+
+    if (!message) {
+        showToast('Please enter a message', 'error');
+        return;
+    }
+
+    const chatMessages = document.getElementById('chat-messages');
+
+    // Add user message to chat
+    const userMessageDiv = document.createElement('div');
+    userMessageDiv.className = 'chat-message user';
+    userMessageDiv.innerHTML = `<strong>You:</strong> ${message}`;
+    chatMessages.appendChild(userMessageDiv);
+
+    // Clear input
+    chatInput.value = '';
+
+    // Show loading indicator
+    const loadingDiv = document.createElement('div');
+    loadingDiv.className = 'chat-message assistant loading';
+    loadingDiv.innerHTML = '<strong>Assistant:</strong> <span class="typing-indicator">Thinking...</span>';
+    chatMessages.appendChild(loadingDiv);
+
+    // Scroll to bottom
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    try {
+        // Get current context (if viewing a case)
+        const context = {};
+        const currentTarget = document.getElementById('result-target');
+        if (currentTarget && currentTarget.textContent) {
+            context.target = currentTarget.textContent;
+        }
+
+        const response = await apiRequest('/chat', {
+            method: 'POST',
+            body: JSON.stringify({
+                message: message,
+                context: context
+            })
+        });
+
+        // Remove loading indicator
+        loadingDiv.remove();
+
+        // Add assistant response
+        const assistantMessageDiv = document.createElement('div');
+        assistantMessageDiv.className = 'chat-message assistant';
+        assistantMessageDiv.innerHTML = `<strong>Assistant:</strong> ${renderMarkdown(response.response)}`;
+        chatMessages.appendChild(assistantMessageDiv);
+
+        // Scroll to bottom
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    } catch (error) {
+        loadingDiv.remove();
+        showToast('Failed to get response from AI assistant', 'error');
+        console.error('Chat error:', error);
     }
 }
 
@@ -337,32 +532,66 @@ async function loadCaseDetails(caseId) {
 // Event Handlers
 // ============================================================================
 
-document.getElementById('case-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
+document.addEventListener('DOMContentLoaded', () => {
+    // Form submission
+    document.getElementById('case-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
 
-    const formData = new FormData(e.target);
-    const selectedTools = getSelectedTools();
+        const formData = new FormData(e.target);
+        const selectedTools = getSelectedTools();
 
-    if (selectedTools.length === 0) {
-        alert('Please select at least one OSINT tool');
-        return;
-    }
+        if (selectedTools.length === 0) {
+            showToast('Please select at least one OSINT tool', 'error');
+            return;
+        }
 
-    const caseData = {
-        title: formData.get('title'),
-        description: formData.get('description') || null,
-        target: formData.get('target'),
-        tools: selectedTools,
-        tool_options: {}
-    };
+        const caseData = {
+            title: formData.get('title'),
+            description: formData.get('description') || null,
+            target: formData.get('target'),
+            tools: selectedTools,
+            tool_options: {}
+        };
 
-    await createCase(caseData);
-});
+        await createCase(caseData);
+    });
 
-document.getElementById('new-case-btn').addEventListener('click', () => {
-    hideElement('results-section');
-    showElement('new-case-section');
-    document.getElementById('new-case-section').scrollIntoView({ behavior: 'smooth' });
+    // New case button
+    document.getElementById('new-case-btn').addEventListener('click', () => {
+        hideElement('results-section');
+        showElement('new-case-section');
+        document.getElementById('new-case-section').scrollIntoView({ behavior: 'smooth' });
+    });
+
+    // Search input (create if doesn't exist)
+    const caseHistorySection = document.querySelector('#case-list').parentElement;
+    const searchContainer = document.createElement('div');
+    searchContainer.className = 'search-container';
+    searchContainer.innerHTML = `
+        <input
+            type="text"
+            id="case-search"
+            placeholder="🔍 Search cases by title, target, ID, or description..."
+            class="search-input"
+        />
+    `;
+    caseHistorySection.insertBefore(searchContainer, caseHistorySection.querySelector('h2').nextSibling);
+
+    document.getElementById('case-search').addEventListener('input', (e) => {
+        filterCases(e.target.value);
+    });
+
+    // AI Chat Assistant
+    document.getElementById('send-chat-btn').addEventListener('click', sendChatMessage);
+    document.getElementById('chat-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendChatMessage();
+        }
+    });
+
+    // Initialize the app
+    init();
 });
 
 // ============================================================================
@@ -370,7 +599,7 @@ document.getElementById('new-case-btn').addEventListener('click', () => {
 // ============================================================================
 
 async function init() {
-    console.log('Loom OSINT Orchestration Platform v2.0 - Initializing...');
+    console.log('🕸️ Loom OSINT Orchestration Platform v2.1 - Initializing...');
 
     // Load available tools
     await loadAvailableTools();
@@ -384,12 +613,64 @@ async function init() {
     // Refresh health every 30 seconds
     setInterval(checkHealth, 30000);
 
-    console.log('Loom initialized successfully');
+    console.log('✅ Loom initialized successfully');
+    showToast('Loom OSINT Platform Ready', 'success');
 }
 
-// Start the app
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-} else {
-    init();
-}
+// Add CSS animations for toasts
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes slideIn {
+        from {
+            transform: translateX(400px);
+            opacity: 0;
+        }
+        to {
+            transform: translateX(0);
+            opacity: 1;
+        }
+    }
+
+    @keyframes slideOut {
+        from {
+            transform: translateX(0);
+            opacity: 1;
+        }
+        to {
+            transform: translateX(400px);
+            opacity: 0;
+        }
+    }
+
+    .search-container {
+        margin: 1rem 0;
+    }
+
+    .search-input {
+        width: 100%;
+        padding: 0.75rem;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border);
+        border-radius: 0.375rem;
+        color: var(--text);
+        font-size: 1rem;
+        transition: border-color 0.2s;
+    }
+
+    .search-input:focus {
+        outline: none;
+        border-color: var(--primary);
+    }
+
+    .report-actions {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .report-actions .btn {
+        flex: 0 0 auto;
+    }
+`;
+document.head.appendChild(style);

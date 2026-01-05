@@ -105,6 +105,36 @@
                 </div>
             </section>
 
+            <!-- AI Research Assistant -->
+            <section class="card" id="ai-assistant-section">
+                <h2>🤖 AI Research Assistant</h2>
+                <p class="tagline">Get help with target research, data orchestration, and investigation planning</p>
+
+                <div class="chat-container" id="chat-container">
+                    <div class="chat-messages" id="chat-messages">
+                        <div class="chat-message assistant">
+                            <strong>Assistant:</strong> Hello! I'm your OSINT research assistant. I can help you:
+                            <ul>
+                                <li>Plan investigation strategies for your targets</li>
+                                <li>Suggest which tools to use based on your target type</li>
+                                <li>Help analyze and correlate findings</li>
+                                <li>Provide context about OSINT techniques</li>
+                            </ul>
+                            How can I assist with your investigation today?
+                        </div>
+                    </div>
+
+                    <div class="chat-input-container">
+                        <textarea
+                            id="chat-input"
+                            placeholder="Ask me anything about OSINT, targets, or research strategies..."
+                            rows="2"
+                        ></textarea>
+                        <button class="btn btn-primary" id="send-chat-btn">Send</button>
+                    </div>
+                </div>
+            </section>
+
             <!-- Case History -->
             <section class="card">
                 <h2>Case History</h2>
